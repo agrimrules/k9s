@@ -2,10 +2,8 @@ package render
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/derailed/k9s/internal/client"
-	"github.com/gdamore/tcell"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -15,42 +13,24 @@ import (
 type PersistentVolumeClaim struct{}
 
 // ColorerFunc colors a resource row.
-func (PersistentVolumeClaim) ColorerFunc() ColorerFunc {
-	return func(ns string, r RowEvent) tcell.Color {
-		c := DefaultColorer(ns, r)
-		if r.Kind == EventAdd || r.Kind == EventUpdate {
-			return c
-		}
-
-		markCol := 2
-		if !client.IsAllNamespaces(ns) {
-			markCol--
-		}
-		if strings.TrimSpace(r.Row.Fields[markCol]) != "Bound" {
-			c = ErrColor
-		}
-
-		return c
-	}
-
+func (p PersistentVolumeClaim) ColorerFunc() ColorerFunc {
+	return DefaultColorer
 }
 
 // Header returns a header rbw.
-func (PersistentVolumeClaim) Header(ns string) HeaderRow {
-	var h HeaderRow
-	if client.IsAllNamespaces(ns) {
-		h = append(h, Header{Name: "NAMESPACE"})
+func (PersistentVolumeClaim) Header(ns string) Header {
+	return Header{
+		HeaderColumn{Name: "NAMESPACE"},
+		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "STATUS"},
+		HeaderColumn{Name: "VOLUME"},
+		HeaderColumn{Name: "CAPACITY"},
+		HeaderColumn{Name: "ACCESS MODES"},
+		HeaderColumn{Name: "STORAGECLASS"},
+		HeaderColumn{Name: "LABELS", Wide: true},
+		HeaderColumn{Name: "VALID", Wide: true},
+		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
 	}
-
-	return append(h,
-		Header{Name: "NAME"},
-		Header{Name: "STATUS"},
-		Header{Name: "VOLUME"},
-		Header{Name: "CAPACITY"},
-		Header{Name: "ACCESS MODES"},
-		Header{Name: "STORAGECLASS"},
-		Header{Name: "AGE", Decorator: AgeDecorator},
-	)
 }
 
 // Render renders a K8s resource to screen.
@@ -85,19 +65,25 @@ func (p PersistentVolumeClaim) Render(o interface{}, ns string, r *Row) error {
 	}
 
 	r.ID = client.MetaFQN(pvc.ObjectMeta)
-	r.Fields = make(Fields, 0, len(p.Header(ns)))
-	if client.IsAllNamespaces(ns) {
-		r.Fields = append(r.Fields, pvc.Namespace)
-	}
-	r.Fields = append(r.Fields,
+	r.Fields = Fields{
+		pvc.Namespace,
 		pvc.Name,
 		string(phase),
 		pvc.Spec.VolumeName,
 		capacity,
 		accessModes,
 		class,
+		mapToStr(pvc.Labels),
+		asStatus(p.diagnose(string(phase))),
 		toAge(pvc.ObjectMeta.CreationTimestamp),
-	)
+	}
 
+	return nil
+}
+
+func (PersistentVolumeClaim) diagnose(r string) error {
+	if r != "Bound" && r != "Available" {
+		return fmt.Errorf("unexpected status %s", r)
+	}
 	return nil
 }

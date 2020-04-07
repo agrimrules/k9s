@@ -22,10 +22,13 @@ const (
 	longAppDesc  = "K9s is a CLI to view and manage your Kubernetes clusters."
 )
 
+var _ config.KubeSettings = (*client.Config)(nil)
+
 var (
 	version, commit, date = "dev", "dev", "n/a"
 	k9sFlags              *config.Flags
 	k8sFlags              *genericclioptions.ConfigFlags
+	demoMode              = new(bool)
 
 	rootCmd = &cobra.Command{
 		Use:   appName,
@@ -33,27 +36,26 @@ var (
 		Long:  longAppDesc,
 		Run:   run,
 	}
-	_ config.KubeSettings = &client.Config{}
 )
 
 func init() {
-	const falseFlag = "false"
 	rootCmd.AddCommand(versionCmd(), infoCmd())
+	initTransientFlags()
 	initK9sFlags()
 	initK8sFlags()
 
 	// Klogs (of course) want to print stuff to the screen ;(
 	klog.InitFlags(nil)
-	if err := flag.Set("log_file", config.K9sLogs); err != nil {
+	if err := flag.Set("log_file", "/dev/null"); err != nil {
 		log.Error().Err(err)
 	}
 	if err := flag.Set("stderrthreshold", "fatal"); err != nil {
 		log.Error().Err(err)
 	}
-	if err := flag.Set("alsologtostderr", falseFlag); err != nil {
+	if err := flag.Set("alsologtostderr", "false"); err != nil {
 		log.Error().Err(err)
 	}
-	if err := flag.Set("logtostderr", falseFlag); err != nil {
+	if err := flag.Set("logtostderr", "false"); err != nil {
 		log.Error().Err(err)
 	}
 }
@@ -72,7 +74,7 @@ func run(cmd *cobra.Command, args []string) {
 			log.Error().Msg(string(debug.Stack()))
 			printLogo(color.Red)
 			fmt.Printf("%s", color.Colorize("Boom!! ", color.Red))
-			fmt.Println(color.Colorize(fmt.Sprintf("%v.", err), color.White))
+			fmt.Println(color.Colorize(fmt.Sprintf("%v.", err), color.LightGray))
 		}
 	}()
 
@@ -84,7 +86,12 @@ func run(cmd *cobra.Command, args []string) {
 		if err := app.Init(version, *k9sFlags.RefreshRate); err != nil {
 			panic(err)
 		}
-		app.Run()
+		if err := app.Run(); err != nil {
+			panic(err)
+		}
+		if view.ExitStatus != "" {
+			panic(view.ExitStatus)
+		}
 	}
 }
 
@@ -99,12 +106,20 @@ func loadConfiguration() *config.Config {
 		log.Warn().Msg("Unable to locate K9s config. Generating new configuration...")
 	}
 
+	log.Debug().Msgf("DEMO MODE %#v", demoMode)
+	if demoMode != nil {
+		k9sCfg.SetDemoMode(*demoMode)
+	}
 	if *k9sFlags.RefreshRate != config.DefaultRefreshRate {
 		k9sCfg.K9s.OverrideRefreshRate(*k9sFlags.RefreshRate)
 	}
 
 	if k9sFlags.Headless != nil {
 		k9sCfg.K9s.OverrideHeadless(*k9sFlags.Headless)
+	}
+
+	if k9sFlags.ReadOnly != nil {
+		k9sCfg.K9s.OverrideReadOnly(*k9sFlags.ReadOnly)
 	}
 
 	if k9sFlags.Command != nil {
@@ -121,8 +136,8 @@ func loadConfiguration() *config.Config {
 	k9sCfg.SetConnection(client.InitConnectionOrDie(k8sCfg))
 
 	// Try to access server version if that fail. Connectivity issue?
-	if _, err := k9sCfg.GetConnection().ServerVersion(); err != nil {
-		log.Panic().Err(err).Msg("K9s can't connect to cluster")
+	if !k9sCfg.GetConnection().CheckConnectivity() {
+		log.Panic().Msgf("K9s can't connect to cluster")
 	}
 	log.Info().Msg("✅ Kubernetes connectivity")
 	if err := k9sCfg.Save(); err != nil {
@@ -149,6 +164,15 @@ func parseLevel(level string) zerolog.Level {
 	default:
 		return zerolog.InfoLevel
 	}
+}
+
+func initTransientFlags() {
+	rootCmd.Flags().BoolVar(
+		demoMode,
+		"demo",
+		false,
+		"Enable demo mode to show keyboard commands",
+	)
 }
 
 func initK9sFlags() {
@@ -182,6 +206,12 @@ func initK9sFlags() {
 		"command", "c",
 		config.DefaultCommand,
 		"Specify the default command to view when the application launches",
+	)
+	rootCmd.Flags().BoolVar(
+		k9sFlags.ReadOnly,
+		"readonly",
+		false,
+		"Disable all commands that modify the cluster",
 	)
 }
 

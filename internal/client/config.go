@@ -3,11 +3,8 @@ package client
 import (
 	"errors"
 	"fmt"
-	"net"
-	"regexp"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/rs/zerolog/log"
 	v1 "k8s.io/api/core/v1"
@@ -17,7 +14,10 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
-const dialTimeout = 5 * time.Second
+const (
+	defaultQPS   = 50
+	defaultBurst = 50
+)
 
 // Config tracks a kubernetes configuration.
 type Config struct {
@@ -37,21 +37,6 @@ func NewConfig(f *genericclioptions.ConfigFlags) *Config {
 	}
 }
 
-// CheckConnectivity return true if api server is cool or false otherwise.
-func (c *Config) CheckConnectivity() bool {
-	address := strings.Replace(c.restConfig.Host, "https://", "", 1)
-	rx := regexp.MustCompile(`\A.+:\d+`)
-	if !rx.MatchString(address) {
-		address += ":443"
-	}
-
-	if _, err := net.DialTimeout("tcp", address, dialTimeout); err != nil {
-		log.Error().Err(err).Msgf("DIAL TIMEDOUT!")
-		return false
-	}
-	return true
-}
-
 // Flags returns configuration flags.
 func (c *Config) Flags() *genericclioptions.ConfigFlags {
 	return c.flags
@@ -62,6 +47,10 @@ func (c *Config) SwitchContext(name string) error {
 	currentCtx, err := c.CurrentContextName()
 	if err != nil {
 		return err
+	}
+
+	if _, err := c.GetContext(name); err != nil {
+		return fmt.Errorf("context %s does not exist", name)
 	}
 
 	if currentCtx != name {
@@ -189,11 +178,29 @@ func (c *Config) ClusterNames() ([]string, error) {
 
 // CurrentGroupNames retrieves the active group names.
 func (c *Config) CurrentGroupNames() ([]string, error) {
-	if c.flags.ImpersonateGroup != nil && len(*c.flags.ImpersonateGroup) != 0 {
+	if areSet(c.flags.ImpersonateGroup) {
 		return *c.flags.ImpersonateGroup, nil
 	}
 
 	return []string{}, errors.New("unable to locate current group")
+}
+
+// ImpersonateGroups retrieves the active groupsif set on the CLI.
+func (c *Config) ImpersonateGroups() (string, error) {
+	if areSet(c.flags.ImpersonateGroup) {
+		return strings.Join(*c.flags.ImpersonateGroup, ","), nil
+	}
+
+	return "", errors.New("no groups set")
+}
+
+// ImpersonateUser retrieves the active user name if set on the CLI.
+func (c *Config) ImpersonateUser() (string, error) {
+	if isSet(c.flags.Impersonate) {
+		return *c.flags.Impersonate, nil
+	}
+
+	return "", errors.New("no user set")
 }
 
 // CurrentUserName retrieves the active user name.
@@ -301,6 +308,8 @@ func (c *Config) RESTConfig() (*restclient.Config, error) {
 	if c.restConfig, err = c.flags.ToRESTConfig(); err != nil {
 		return nil, err
 	}
+	c.restConfig.QPS = defaultQPS
+	c.restConfig.Burst = defaultBurst
 	log.Debug().Msgf("Connecting to API Server %s", c.restConfig.Host)
 
 	return c.restConfig, nil
@@ -319,5 +328,9 @@ func (c *Config) ensureConfig() {
 // Helpers...
 
 func isSet(s *string) bool {
+	return s != nil && len(*s) != 0
+}
+
+func areSet(s *[]string) bool {
 	return s != nil && len(*s) != 0
 }

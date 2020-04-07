@@ -27,7 +27,7 @@ func NewScreenDump(gvr client.GVR) ResourceViewer {
 	s.GetTable().SetBorderFocusColor(tcell.ColorSteelBlue)
 	s.GetTable().SetSelectedStyle(tcell.ColorWhite, tcell.ColorRoyalBlue, tcell.AttrNone)
 	s.GetTable().SetColorerFn(render.ScreenDump{}.ColorerFunc())
-	s.GetTable().SetSortCol(s.GetTable().NameColIndex(), 0, true)
+	s.GetTable().SetSortCol(ageCol, true)
 	s.GetTable().SelectRow(1, true)
 	s.GetTable().SetEnterFn(s.edit)
 	s.SetContextFn(s.dirContext)
@@ -37,6 +37,8 @@ func NewScreenDump(gvr client.GVR) ResourceViewer {
 
 func (s *ScreenDump) dirContext(ctx context.Context) context.Context {
 	dir := filepath.Join(config.K9sDumpDir, s.App().Config.K9s.CurrentCluster)
+	log.Debug().Msgf("SD-DIR %q", dir)
+	config.EnsureFullPath(dir, config.DefaultDirMod)
 	return context.WithValue(ctx, internal.KeyDir, dir)
 }
 
@@ -45,7 +47,7 @@ func (s *ScreenDump) edit(app *App, model ui.Tabular, gvr, path string) {
 
 	s.Stop()
 	defer s.Start()
-	if !edit(true, app, path) {
+	if !edit(app, shellOpts{clear: true, args: []string{path}}) {
 		app.Flash().Err(errors.New("Failed to launch editor"))
 	}
 }

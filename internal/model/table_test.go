@@ -21,7 +21,7 @@ import (
 )
 
 func TestTableRefresh(t *testing.T) {
-	ta := model.NewTable("v1/pods")
+	ta := model.NewTable(client.NewGVR("v1/pods"))
 	ta.SetNamespace(client.NamespaceAll)
 
 	l := tableListener{}
@@ -30,9 +30,10 @@ func TestTableRefresh(t *testing.T) {
 	f.rows = []runtime.Object{mustLoad("p1")}
 	ctx := context.WithValue(context.Background(), internal.KeyFactory, f)
 	ctx = context.WithValue(ctx, internal.KeyFields, "")
+	ctx = context.WithValue(ctx, internal.KeyWithMetrics, false)
 	ta.Refresh(ctx)
 	data := ta.Peek()
-	assert.Equal(t, 13, len(data.Header))
+	assert.Equal(t, 17, len(data.Header))
 	assert.Equal(t, 1, len(data.RowEvents))
 	assert.Equal(t, client.NamespaceAll, data.Namespace)
 	assert.Equal(t, 1, l.count)
@@ -40,7 +41,7 @@ func TestTableRefresh(t *testing.T) {
 }
 
 func TestTableNS(t *testing.T) {
-	ta := model.NewTable("v1/pods")
+	ta := model.NewTable(client.NewGVR("v1/pods"))
 	ta.SetNamespace("blee")
 
 	assert.Equal(t, "blee", ta.GetNamespace())
@@ -49,7 +50,7 @@ func TestTableNS(t *testing.T) {
 }
 
 func TestTableAddListener(t *testing.T) {
-	ta := model.NewTable("v1/pods")
+	ta := model.NewTable(client.NewGVR("v1/pods"))
 	ta.SetNamespace("blee")
 
 	assert.True(t, ta.Empty())
@@ -58,7 +59,7 @@ func TestTableAddListener(t *testing.T) {
 }
 
 func TestTableRmListener(t *testing.T) {
-	ta := model.NewTable("v1/pods")
+	ta := model.NewTable(client.NewGVR("v1/pods"))
 	ta.SetNamespace("blee")
 
 	l := tableListener{}
@@ -85,7 +86,7 @@ type tableFactory struct {
 var _ dao.Factory = tableFactory{}
 
 func (f tableFactory) Client() client.Connection {
-	return nil
+	return client.NewTestClient()
 }
 func (f tableFactory) Get(gvr, path string, wait bool, sel labels.Selector) (runtime.Object, error) {
 	if len(f.rows) > 0 {
@@ -116,7 +117,7 @@ func makeTableFactory() tableFactory {
 }
 
 func mustLoad(n string) *unstructured.Unstructured {
-	raw, err := ioutil.ReadFile(fmt.Sprintf("test_assets/%s.json", n))
+	raw, err := ioutil.ReadFile(fmt.Sprintf("testdata/%s.json", n))
 	if err != nil {
 		panic(err)
 	}

@@ -3,12 +3,14 @@ package view
 import (
 	"fmt"
 
-	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/ui"
 	"github.com/gdamore/tcell"
 	"github.com/rs/zerolog/log"
 )
+
+// AllScopes represents actions available for all views.
+const AllScopes = "all"
 
 // Runner represents a runnable action handler.
 type Runner interface {
@@ -20,7 +22,7 @@ type Runner interface {
 
 func hasAll(scopes []string) bool {
 	for _, s := range scopes {
-		if s == "all" {
+		if s == AllScopes {
 			return true
 		}
 	}
@@ -52,31 +54,31 @@ func inScope(scopes, aliases []string) bool {
 func hotKeyActions(r Runner, aa ui.KeyActions) {
 	hh := config.NewHotKeys()
 	if err := hh.Load(); err != nil {
-		log.Error().Err(err).Msgf("Loading HOTKEYS")
 		return
 	}
 
 	for k, hk := range hh.HotKey {
 		key, err := asKey(hk.ShortCut)
 		if err != nil {
-			log.Error().Err(err).Msg("HOT-KEY Unable to map hotkey shortcut to a key")
+			log.Warn().Err(err).Msg("HOT-KEY Unable to map hotkey shortcut to a key")
 			continue
 		}
 		_, ok := aa[key]
 		if ok {
-			log.Error().Err(fmt.Errorf("HOT-KEY Doh! you are trying to overide an existing command `%s", k)).Msg("Invalid shortcut")
+			log.Warn().Err(fmt.Errorf("HOT-KEY Doh! you are trying to overide an existing command `%s", k)).Msg("Invalid shortcut")
 			continue
 		}
 		aa[key] = ui.NewSharedKeyAction(
 			hk.Description,
-			gotoCmd(r, hk.Command),
+			gotoCmd(r, hk.Command, ""),
 			false)
 	}
 }
 
-func gotoCmd(r Runner, cmd string) ui.ActionHandler {
+func gotoCmd(r Runner, cmd, path string) ui.ActionHandler {
 	return func(evt *tcell.EventKey) *tcell.EventKey {
-		if err := r.App().gotoResource(cmd, true); err != nil {
+		if err := r.App().gotoResource(cmd, path, true); err != nil {
+			log.Error().Err(err).Msgf("Command fail")
 			r.App().Flash().Err(err)
 		}
 		return nil
@@ -86,7 +88,6 @@ func gotoCmd(r Runner, cmd string) ui.ActionHandler {
 func pluginActions(r Runner, aa ui.KeyActions) {
 	pp := config.NewPlugins()
 	if err := pp.Load(); err != nil {
-		log.Warn().Msgf("No plugin configuration found")
 		return
 	}
 
@@ -96,12 +97,12 @@ func pluginActions(r Runner, aa ui.KeyActions) {
 		}
 		key, err := asKey(plugin.ShortCut)
 		if err != nil {
-			log.Error().Err(err).Msg("Unable to map plugin shortcut to a key")
+			log.Warn().Err(err).Msg("Unable to map plugin shortcut to a key")
 			continue
 		}
 		_, ok := aa[key]
 		if ok {
-			log.Error().Err(fmt.Errorf("Doh! you are trying to overide an existing command `%s", k)).Msg("Invalid shortcut")
+			log.Warn().Err(fmt.Errorf("Doh! you are trying to overide an existing command `%s", k)).Msg("Invalid shortcut")
 			continue
 		}
 		aa[key] = ui.NewKeyAction(
@@ -118,20 +119,20 @@ func execCmd(r Runner, bin string, bg bool, args ...string) ui.ActionHandler {
 			return evt
 		}
 
-		ns, _ := client.Namespaced(path)
-		var (
-			env = r.EnvFn()()
-			aa  = make([]string, len(args))
-			err error
-		)
+		if r.EnvFn() == nil {
+			return nil
+		}
+
+		aa := make([]string, len(args))
 		for i, a := range args {
-			aa[i], err = env.envFor(ns, a)
+			arg, err := r.EnvFn()().Substitute(a)
 			if err != nil {
 				log.Error().Err(err).Msg("Plugin Args match failed")
 				return nil
 			}
+			aa[i] = arg
 		}
-		if run(true, r.App(), bin, bg, aa...) {
+		if run(r.App(), shellOpts{clear: true, binary: bin, background: bg, args: aa}) {
 			r.App().Flash().Info("Plugin command launched successfully!")
 		} else {
 			r.App().Flash().Info("Plugin command failed!")

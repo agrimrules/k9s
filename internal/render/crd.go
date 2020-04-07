@@ -19,10 +19,11 @@ func (CustomResourceDefinition) ColorerFunc() ColorerFunc {
 }
 
 // Header returns a header rbw.
-func (CustomResourceDefinition) Header(string) HeaderRow {
-	return HeaderRow{
-		Header{Name: "NAME"},
-		Header{Name: "AGE", Decorator: AgeDecorator},
+func (CustomResourceDefinition) Header(string) Header {
+	return Header{
+		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "LABELS", Wide: true},
+		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
 	}
 }
 
@@ -45,6 +46,7 @@ func (CustomResourceDefinition) Render(o interface{}, ns string, r *Row) error {
 	r.ID = client.FQN(client.ClusterScope, extractMetaField(meta, "name"))
 	r.Fields = Fields{
 		extractMetaField(meta, "name"),
+		mapToIfc(meta["labels"]),
 		toAge(metav1.Time{Time: t}),
 	}
 

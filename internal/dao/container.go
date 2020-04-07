@@ -2,9 +2,7 @@ package dao
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"time"
 
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
@@ -14,7 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	restclient "k8s.io/client-go/rest"
 	mv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
@@ -34,24 +31,21 @@ func (c *Container) List(ctx context.Context, _ string) ([]runtime.Object, error
 	if !ok {
 		return nil, fmt.Errorf("no context path for %q", c.gvr)
 	}
+
+	var (
+		pmx *mv1beta1.PodMetrics
+		err error
+	)
+	if withMx, ok := ctx.Value(internal.KeyWithMetrics).(bool); withMx || !ok {
+		if pmx, err = client.DialMetrics(c.Client()).FetchPodMetrics(ctx, fqn); err != nil {
+			log.Warn().Err(err).Msgf("No metrics found for pod %q", fqn)
+		}
+	}
+
 	po, err := c.fetchPod(fqn)
 	if err != nil {
 		return nil, err
 	}
-
-	ns, _ := client.Namespaced(fqn)
-	var pmx *mv1beta1.PodMetrics
-	if c.Client().HasMetrics() {
-		mx := client.NewMetricsServer(c.Client())
-		if c.Client() != nil {
-			var err error
-			pmx, err = mx.FetchPodMetrics(ns, po.Name)
-			if err != nil {
-				log.Warn().Err(err).Msgf("No metrics found for pod %q:%q", ns, po.Name)
-			}
-		}
-	}
-
 	res := make([]runtime.Object, 0, len(po.Spec.InitContainers)+len(po.Spec.Containers))
 	for _, co := range po.Spec.InitContainers {
 		res = append(res, makeContainerRes(co, po, pmx, true))
@@ -64,44 +58,18 @@ func (c *Container) List(ctx context.Context, _ string) ([]runtime.Object, error
 }
 
 // TailLogs tails a given container logs
-func (c *Container) TailLogs(ctx context.Context, logChan chan<- string, opts LogOptions) error {
-	fac, ok := ctx.Value(internal.KeyFactory).(Factory)
-	if !ok {
-		return errors.New("Expecting an informer")
-	}
-	o, err := fac.Get("v1/pods", opts.Path, true, labels.Everything())
-	if err != nil {
-		return err
-	}
+func (c *Container) TailLogs(ctx context.Context, logChan LogChan, opts LogOptions) error {
+	log.Debug().Msgf("CONTAINER-LOGS")
+	po := Pod{}
+	po.Init(c.Factory, client.NewGVR("v1/pods"))
 
-	var po v1.Pod
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(o.(*unstructured.Unstructured).Object, &po); err != nil {
-		return err
-	}
-
-	return tailLogs(ctx, c, logChan, opts)
-}
-
-// Logs fetch container logs for a given pod and container.
-func (c *Container) Logs(path string, opts *v1.PodLogOptions) (*restclient.Request, error) {
-	ns, _ := client.Namespaced(path)
-	auth, err := c.Client().CanI(ns, "v1/pods:log", client.GetAccess)
-	if !auth || err != nil {
-		return nil, err
-	}
-
-	ns, n := client.Namespaced(path)
-	return c.Client().DialOrDie().CoreV1().Pods(ns).GetLogs(n, opts), nil
+	return po.TailLogs(ctx, logChan, opts)
 }
 
 // ----------------------------------------------------------------------------
 // Helpers...
 
 func makeContainerRes(co v1.Container, po *v1.Pod, pmx *mv1beta1.PodMetrics, isInit bool) render.ContainerRes {
-	defer func(t time.Time) {
-		log.Debug().Msgf("MAKE-CO %s -- %v", co.Name, time.Since(t))
-	}(time.Now())
-
 	cmx, err := containerMetrics(co.Name, pmx)
 	if err != nil {
 		log.Warn().Err(err).Msgf("No container metrics found for %s::%s", po.Name, co.Name)

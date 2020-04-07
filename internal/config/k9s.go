@@ -2,34 +2,32 @@ package config
 
 import "github.com/derailed/k9s/internal/client"
 
-const (
-	defaultRefreshRate    = 2
-	defaultLogRequestSize = 200
-	defaultLogBufferSize  = 1000
-)
+const defaultRefreshRate = 2
 
 // K9s tracks K9s configuration options.
 type K9s struct {
 	RefreshRate       int                 `yaml:"refreshRate"`
 	Headless          bool                `yaml:"headless"`
-	LogBufferSize     int                 `yaml:"logBufferSize"`
-	LogRequestSize    int                 `yaml:"logRequestSize"`
+	ReadOnly          bool                `yaml:"readOnly"`
+	NoIcons           bool                `yaml:"noIcons"`
+	Logger            *Logger             `yaml:"logger"`
 	CurrentContext    string              `yaml:"currentContext"`
 	CurrentCluster    string              `yaml:"currentCluster"`
-	FullScreenLogs    bool                `yaml:"fullScreenLogs"`
 	Clusters          map[string]*Cluster `yaml:"clusters,omitempty"`
+	Thresholds        Threshold           `yaml:"thresholds"`
 	manualRefreshRate int
 	manualHeadless    *bool
+	manualReadOnly    *bool
 	manualCommand     *string
 }
 
 // NewK9s create a new K9s configuration.
 func NewK9s() *K9s {
 	return &K9s{
-		RefreshRate:    defaultRefreshRate,
-		LogBufferSize:  defaultLogBufferSize,
-		LogRequestSize: defaultLogRequestSize,
-		Clusters:       make(map[string]*Cluster),
+		RefreshRate: defaultRefreshRate,
+		Logger:      NewLogger(),
+		Clusters:    make(map[string]*Cluster),
+		Thresholds:  NewThreshold(),
 	}
 }
 
@@ -41,6 +39,11 @@ func (k *K9s) OverrideRefreshRate(r int) {
 // OverrideHeadless set the headlessness manually.
 func (k *K9s) OverrideHeadless(b bool) {
 	k.manualHeadless = &b
+}
+
+// OverrideReadOnly set the readonly mode manually.
+func (k *K9s) OverrideReadOnly(b bool) {
+	k.manualReadOnly = &b
 }
 
 // OverrideCommand set the command manually.
@@ -68,6 +71,15 @@ func (k *K9s) GetRefreshRate() int {
 	return rate
 }
 
+// GetReadOnly returns the readonly setting.
+func (k *K9s) GetReadOnly() bool {
+	readOnly := k.ReadOnly
+	if k.manualReadOnly != nil && *k.manualReadOnly {
+		readOnly = *k.manualReadOnly
+	}
+	return readOnly
+}
+
 // ActiveCluster returns the currently active cluster.
 func (k *K9s) ActiveCluster() *Cluster {
 	if k.Clusters == nil {
@@ -85,14 +97,6 @@ func (k *K9s) ActiveCluster() *Cluster {
 func (k *K9s) validateDefaults() {
 	if k.RefreshRate <= 0 {
 		k.RefreshRate = defaultRefreshRate
-	}
-
-	if k.LogBufferSize <= 0 {
-		k.LogBufferSize = defaultLogBufferSize
-	}
-
-	if k.LogRequestSize <= 0 {
-		k.LogRequestSize = defaultLogRequestSize
 	}
 }
 
@@ -115,11 +119,20 @@ func (k *K9s) checkClusters(ks KubeSettings) {
 // Validate the current configuration.
 func (k *K9s) Validate(c client.Connection, ks KubeSettings) {
 	k.validateDefaults()
-
 	if k.Clusters == nil {
 		k.Clusters = map[string]*Cluster{}
 	}
 	k.checkClusters(ks)
+
+	if k.Logger == nil {
+		k.Logger = NewLogger()
+	} else {
+		k.Logger.Validate(c, ks)
+	}
+	if k.Thresholds == nil {
+		k.Thresholds = NewThreshold()
+	}
+	k.Thresholds.Validate(c, ks)
 
 	if ctx, err := ks.CurrentContextName(); err == nil && len(k.CurrentContext) == 0 {
 		k.CurrentContext = ctx

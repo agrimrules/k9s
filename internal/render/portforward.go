@@ -33,22 +33,23 @@ type PortForward struct{}
 
 // ColorerFunc colors a resource row.
 func (PortForward) ColorerFunc() ColorerFunc {
-	return func(ns string, re RowEvent) tcell.Color {
+	return func(ns string, _ Header, re RowEvent) tcell.Color {
 		return tcell.ColorSkyblue
 	}
 }
 
 // Header returns a header row.
-func (PortForward) Header(ns string) HeaderRow {
-	return HeaderRow{
-		Header{Name: "NAMESPACE"},
-		Header{Name: "POD"},
-		Header{Name: "CONTAINER"},
-		Header{Name: "PORTS"},
-		Header{Name: "URL"},
-		Header{Name: "C"},
-		Header{Name: "N"},
-		Header{Name: "AGE", Decorator: AgeDecorator},
+func (PortForward) Header(ns string) Header {
+	return Header{
+		HeaderColumn{Name: "NAMESPACE"},
+		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "CONTAINER"},
+		HeaderColumn{Name: "PORTS"},
+		HeaderColumn{Name: "URL"},
+		HeaderColumn{Name: "C"},
+		HeaderColumn{Name: "N"},
+		HeaderColumn{Name: "VALID", Wide: true},
+		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
 	}
 }
 
@@ -69,8 +70,9 @@ func (f PortForward) Render(o interface{}, gvr string, r *Row) error {
 		pf.Container(),
 		strings.Join(pf.Ports(), ","),
 		UrlFor(pf.Config.Host, pf.Config.Path, ports[0]),
-		asNum(pf.Config.C),
-		asNum(pf.Config.N),
+		AsThousands(int64(pf.Config.C)),
+		AsThousands(int64(pf.Config.N)),
+		"",
 		pf.Age(),
 	}
 

@@ -1,8 +1,9 @@
-package client
+package client_test
 
 import (
 	"testing"
 
+	"github.com/derailed/k9s/internal/client"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -11,28 +12,85 @@ import (
 	v1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
-func TestPodsMetrics(t *testing.T) {
-	m := NewMetricsServer(nil)
+func TestToPercentage(t *testing.T) {
+	uu := []struct {
+		v1, v2 int64
+		e      int
+	}{
+		{0, 0, 0},
+		{100, 200, 50},
+		{200, 100, 200},
+		{224, 4000, 5},
+	}
 
-	metrics := v1beta1.PodMetricsList{
-		Items: []v1beta1.PodMetrics{
-			*makeMxPod("p1", "1", "4Gi"),
-			*makeMxPod("p2", "50m", "1Mi"),
+	for _, u := range uu {
+		assert.Equal(t, u.e, client.ToPercentage(u.v1, u.v2))
+	}
+}
+
+func TestToMB(t *testing.T) {
+	const mb = 1024 * 1024
+	uu := []struct {
+		v int64
+		e int64
+	}{
+		{0, 0},
+		{2 * mb, 2},
+		{10 * mb, 10},
+	}
+
+	for _, u := range uu {
+		assert.Equal(t, u.e, client.ToMB(u.v))
+	}
+}
+
+func TestPodsMetrics(t *testing.T) {
+	uu := map[string]struct {
+		metrics *mv1beta1.PodMetricsList
+		eSize   int
+		e       client.PodsMetrics
+	}{
+		"dud": {
+			eSize: 0,
+		},
+
+		"ok": {
+			metrics: &v1beta1.PodMetricsList{
+				Items: []v1beta1.PodMetrics{
+					*makeMxPod("p1", "1", "4Gi"),
+					*makeMxPod("p2", "50m", "1Mi"),
+				},
+			},
+			eSize: 2,
+			e: client.PodsMetrics{
+				"default/p1": client.PodMetrics{
+					CurrentCPU: 3000,
+					CurrentMEM: 12288,
+				},
+			},
 		},
 	}
 
-	mmx := make(PodsMetrics)
-	m.PodsMetrics(&metrics, mmx)
-	assert.Equal(t, 2, len(mmx))
+	m := client.NewMetricsServer(nil)
+	for k := range uu {
+		u := uu[k]
+		t.Run(k, func(t *testing.T) {
+			mmx := make(client.PodsMetrics)
+			m.PodsMetrics(u.metrics, mmx)
 
-	mx, ok := mmx["default/p1"]
-	assert.True(t, ok)
-	assert.Equal(t, int64(3000), mx.CurrentCPU)
-	assert.Equal(t, float64(12288), mx.CurrentMEM)
+			assert.Equal(t, u.eSize, len(mmx))
+			if u.eSize == 0 {
+				return
+			}
+			mx, ok := mmx["default/p1"]
+			assert.True(t, ok)
+			assert.Equal(t, u.e["default/p1"], mx)
+		})
+	}
 }
 
 func BenchmarkPodsMetrics(b *testing.B) {
-	m := NewMetricsServer(nil)
+	m := client.NewMetricsServer(nil)
 
 	metrics := v1beta1.PodMetricsList{
 		Items: []v1beta1.PodMetrics{
@@ -41,7 +99,7 @@ func BenchmarkPodsMetrics(b *testing.B) {
 			*makeMxPod("p3", "50m", "1Mi"),
 		},
 	}
-	mmx := make(PodsMetrics, 3)
+	mmx := make(client.PodsMetrics, 3)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -51,33 +109,80 @@ func BenchmarkPodsMetrics(b *testing.B) {
 }
 
 func TestNodesMetrics(t *testing.T) {
-	m := NewMetricsServer(nil)
-
-	nodes := v1.NodeList{
-		Items: []v1.Node{
-			makeNode("n1", "32", "128Gi", "50m", "2Mi"),
-			makeNode("n2", "8", "4Gi", "50m", "10Mi"),
+	uu := map[string]struct {
+		nodes   *v1.NodeList
+		metrics *mv1beta1.NodeMetricsList
+		eSize   int
+		e       client.NodesMetrics
+	}{
+		"duds": {
+			eSize: 0,
+		},
+		"no_nodes": {
+			metrics: &v1beta1.NodeMetricsList{
+				Items: []v1beta1.NodeMetrics{
+					*makeMxNode("n1", "10", "8Gi"),
+					*makeMxNode("n2", "50m", "1Mi"),
+				},
+			},
+			eSize: 0,
+		},
+		"no_metrics": {
+			nodes: &v1.NodeList{
+				Items: []v1.Node{
+					makeNode("n1", "32", "128Gi", "50m", "2Mi"),
+					makeNode("n2", "8", "4Gi", "50m", "10Mi"),
+				},
+			},
+			eSize: 0,
+		},
+		"ok": {
+			nodes: &v1.NodeList{
+				Items: []v1.Node{
+					makeNode("n1", "32", "128Gi", "32", "128Gi"),
+					makeNode("n2", "8", "4Gi", "8", "4Gi"),
+				},
+			},
+			metrics: &v1beta1.NodeMetricsList{
+				Items: []v1beta1.NodeMetrics{
+					*makeMxNode("n1", "10", "8Gi"),
+					*makeMxNode("n2", "50m", "1Mi"),
+				},
+			},
+			eSize: 2,
+			e: client.NodesMetrics{
+				"n1": client.NodeMetrics{
+					TotalCPU:       32000,
+					TotalMEM:       131072,
+					AllocatableCPU: 32000,
+					AllocatableMEM: 131072,
+					AvailableCPU:   22000,
+					AvailableMEM:   122880,
+					CurrentMetrics: client.CurrentMetrics{
+						CurrentCPU: 10000,
+						CurrentMEM: 8192,
+					},
+				},
+			},
 		},
 	}
 
-	metrics := v1beta1.NodeMetricsList{
-		Items: []v1beta1.NodeMetrics{
-			*makeMxNode("n1", "10", "8Gi"),
-			*makeMxNode("n2", "50m", "1Mi"),
-		},
-	}
+	m := client.NewMetricsServer(nil)
+	for k := range uu {
+		u := uu[k]
+		t.Run(k, func(t *testing.T) {
+			mmx := make(client.NodesMetrics)
+			m.NodesMetrics(u.nodes, u.metrics, mmx)
 
-	mmx := make(NodesMetrics)
-	m.NodesMetrics(&nodes, &metrics, mmx)
-	assert.Equal(t, 2, len(mmx))
-	mx, ok := mmx["n1"]
-	assert.True(t, ok)
-	assert.Equal(t, int64(32000), mx.TotalCPU)
-	assert.Equal(t, float64(131072), mx.TotalMEM)
-	assert.Equal(t, int64(50), mx.AvailCPU)
-	assert.Equal(t, float64(2), mx.AvailMEM)
-	assert.Equal(t, int64(10000), mx.CurrentCPU)
-	assert.Equal(t, float64(8192), mx.CurrentMEM)
+			assert.Equal(t, u.eSize, len(mmx))
+			if u.eSize == 0 {
+				return
+			}
+			mx, ok := mmx["n1"]
+			assert.True(t, ok)
+			assert.Equal(t, u.e["n1"], mx)
+		})
+	}
 }
 
 func BenchmarkNodesMetrics(b *testing.B) {
@@ -95,8 +200,8 @@ func BenchmarkNodesMetrics(b *testing.B) {
 		},
 	}
 
-	m := NewMetricsServer(nil)
-	mmx := make(NodesMetrics)
+	m := client.NewMetricsServer(nil)
+	mmx := make(client.NodesMetrics)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -106,26 +211,65 @@ func BenchmarkNodesMetrics(b *testing.B) {
 }
 
 func TestClusterLoad(t *testing.T) {
-	m := NewMetricsServer(nil)
+	uu := map[string]struct {
+		nodes   *v1.NodeList
+		metrics *mv1beta1.NodeMetricsList
+		eSize   int
+		e       client.ClusterMetrics
+	}{
+		"duds": {
+			eSize: 0,
+		},
+		"no_nodes": {
+			metrics: &v1beta1.NodeMetricsList{
+				Items: []v1beta1.NodeMetrics{
+					*makeMxNode("n1", "10", "8Gi"),
+					*makeMxNode("n2", "50m", "1Mi"),
+				},
+			},
+			eSize: 0,
+		},
+		"no_metrics": {
+			nodes: &v1.NodeList{
+				Items: []v1.Node{
+					makeNode("n1", "32", "128Gi", "50m", "2Mi"),
+					makeNode("n2", "8", "4Gi", "50m", "10Mi"),
+				},
+			},
+			eSize: 0,
+		},
+		"ok": {
 
-	nodes := v1.NodeList{
-		Items: []v1.Node{
-			makeNode("n1", "100m", "4Mi", "50m", "2Mi"),
-			makeNode("n2", "100m", "4Mi", "50m", "2Mi"),
+			nodes: &v1.NodeList{
+				Items: []v1.Node{
+					makeNode("n1", "100m", "4Mi", "50m", "2Mi"),
+					makeNode("n2", "100m", "4Mi", "50m", "2Mi"),
+				},
+			},
+			metrics: &v1beta1.NodeMetricsList{
+				Items: []v1beta1.NodeMetrics{
+					*makeMxNode("n1", "50m", "1Mi"),
+					*makeMxNode("n2", "50m", "1Mi"),
+				},
+			},
+			eSize: 2,
+			e: client.ClusterMetrics{
+				PercCPU: 100.0,
+				PercMEM: 50.0,
+			},
 		},
 	}
 
-	metrics := mv1beta1.NodeMetricsList{
-		Items: []mv1beta1.NodeMetrics{
-			*makeMxNode("n1", "50m", "1Mi"),
-			*makeMxNode("n2", "50m", "1Mi"),
-		},
-	}
+	m := client.NewMetricsServer(nil)
+	for k := range uu {
+		u := uu[k]
+		t.Run(k, func(t *testing.T) {
+			var cmx client.ClusterMetrics
+			m.ClusterLoad(u.nodes, u.metrics, &cmx)
 
-	var mx ClusterMetrics
-	m.ClusterLoad(&nodes, &metrics, &mx)
-	assert.Equal(t, 100.0, mx.PercCPU)
-	assert.Equal(t, 50.0, mx.PercMEM)
+			assert.Equal(t, u.e, cmx)
+		})
+	}
 }
 
 func BenchmarkClusterLoad(b *testing.B) {
@@ -143,8 +287,8 @@ func BenchmarkClusterLoad(b *testing.B) {
 		},
 	}
 
-	m := NewMetricsServer(nil)
-	var mx ClusterMetrics
+	m := client.NewMetricsServer(nil)
+	var mx client.ClusterMetrics
 	b.ResetTimer()
 	b.ReportAllocs()
 	for n := 0; n < b.N; n++ {

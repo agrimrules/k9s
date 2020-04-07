@@ -51,8 +51,53 @@ type TreeRef string
 
 // NodeSpec represents a node resource specification.
 type NodeSpec struct {
-	GVR, Path, Status string
-	Parent            *NodeSpec
+	GVRs, Paths, Statuses []string
+}
+
+// ParentGVR returns the parent GVR.
+func (s NodeSpec) ParentGVR() *string {
+	if len(s.GVRs) > 1 {
+		return &s.GVRs[1]
+	}
+	return nil
+}
+
+// ParentPath returns the parent path.
+func (s NodeSpec) ParentPath() *string {
+	if len(s.Paths) > 1 {
+		return &s.Paths[1]
+	}
+	return nil
+}
+
+// GVR returns the current GVR.
+func (s NodeSpec) GVR() string {
+	return s.GVRs[0]
+}
+
+// Path returns the current path.
+func (s NodeSpec) Path() string {
+	return s.Paths[0]
+}
+
+// Status returns the current status.
+func (s NodeSpec) Status() string {
+	return s.Statuses[0]
+}
+
+// AsPath returns path hierarchy as string.
+func (s NodeSpec) AsPath() string {
+	return strings.Join(s.Paths, PathSeparator)
+}
+
+// AsGVR returns a gvr hierarchy as string.
+func (s NodeSpec) AsGVR() string {
+	return strings.Join(s.GVRs, PathSeparator)
+}
+
+// AsStatus returns a status hierarchy as string.
+func (s NodeSpec) AsStatus() string {
+	return strings.Join(s.Statuses, PathSeparator)
 }
 
 // ----------------------------------------------------------------------------
@@ -144,19 +189,17 @@ func (t *TreeNode) Sort() {
 
 // Spec returns this node specification.
 func (t *TreeNode) Spec() NodeSpec {
-	parent := t
-	var gvr, path, status []string
-	for parent != nil {
-		gvr = append(gvr, parent.GVR)
-		path = append(path, parent.ID)
-		status = append(status, parent.Extras[StatusKey])
-		parent = parent.Parent
+	var GVRs, Paths, Statuses []string
+	for parent := t; parent != nil; parent = parent.Parent {
+		GVRs = append(GVRs, parent.GVR)
+		Paths = append(Paths, parent.ID)
+		Statuses = append(Statuses, parent.Extras[StatusKey])
 	}
 
 	return NodeSpec{
-		GVR:    strings.Join(gvr, PathSeparator),
-		Path:   strings.Join(path, PathSeparator),
-		Status: strings.Join(status, PathSeparator),
+		GVRs:     GVRs,
+		Paths:    Paths,
+		Statuses: Statuses,
 	}
 }
 
@@ -179,21 +222,18 @@ func (t *TreeNode) Blank() bool {
 }
 
 // Hydrate hydrates a full tree bases on a collection of specifications.
-func Hydrate(refs []NodeSpec) *TreeNode {
+func Hydrate(specs []NodeSpec) *TreeNode {
 	root := NewTreeNode("", "")
 	nav := root
-	for _, ref := range refs {
-		gvrs := strings.Split(ref.GVR, PathSeparator)
-		paths := strings.Split(ref.Path, PathSeparator)
-		statuses := strings.Split(ref.Status, PathSeparator)
-		for i := len(paths) - 1; i >= 0; i-- {
+	for _, spec := range specs {
+		for i := len(spec.Paths) - 1; i >= 0; i-- {
 			if nav.Blank() {
-				nav.GVR, nav.ID, nav.Extras[StatusKey] = gvrs[i], paths[i], statuses[i]
+				nav.GVR, nav.ID, nav.Extras[StatusKey] = spec.GVRs[i], spec.Paths[i], spec.Statuses[i]
 				continue
 			}
-			c := NewTreeNode(gvrs[i], paths[i])
-			c.Extras[StatusKey] = statuses[i]
-			if n := nav.Find(gvrs[i], paths[i]); n == nil {
+			c := NewTreeNode(spec.GVRs[i], spec.Paths[i])
+			c.Extras[StatusKey] = spec.Statuses[i]
+			if n := nav.Find(spec.GVRs[i], spec.Paths[i]); n == nil {
 				nav.Add(c)
 				nav = c
 			} else {
@@ -259,7 +299,7 @@ func (t *TreeNode) Filter(q string, filter func(q, path string) bool) *TreeNode 
 	specs := t.Flatten()
 	matches := make([]NodeSpec, 0, len(specs))
 	for _, s := range specs {
-		if filter(q, s.Path+s.Status) {
+		if filter(q, s.AsPath()+s.AsStatus()) {
 			matches = append(matches, s)
 		}
 	}
@@ -295,8 +335,8 @@ func (t *TreeNode) Find(gvr, id string) *TreeNode {
 }
 
 // Title computes the node title.
-func (t *TreeNode) Title() string {
-	return t.toTitle()
+func (t *TreeNode) Title(noIcons bool) string {
+	return t.computeTitle(noIcons)
 }
 
 // ----------------------------------------------------------------------------
@@ -335,12 +375,20 @@ func dumpStdOut(n *TreeNode, level int) {
 }
 
 func category(gvr string) string {
-	meta, err := dao.MetaFor(client.NewGVR(gvr))
+	meta, err := dao.MetaAccess.MetaFor(client.NewGVR(gvr))
 	if err != nil {
 		return ""
 	}
 
 	return meta.SingularName
+}
+
+func (t TreeNode) computeTitle(noIcons bool) string {
+	if !noIcons {
+		return t.toEmojiTitle()
+	}
+
+	return t.toTitle()
 }
 
 const (
@@ -360,10 +408,9 @@ func (t TreeNode) toTitle() (title string) {
 			color, status = "orange", toast+"_REF"
 		}
 	}
-
 	defer func() {
 		if status != "OK" {
-			title += fmt.Sprintf("  [gray::-][[%s::b]%s[gray::-]]", color, status)
+			title += fmt.Sprintf("  [gray::-][yellow:%s:b]%s[gray::-]", color, status)
 		}
 	}()
 
@@ -382,7 +429,152 @@ func (t TreeNode) toTitle() (title string) {
 	if !ok {
 		return
 	}
-
 	title += fmt.Sprintf(" [antiquewhite::][%s][::]", info)
+
 	return
+}
+
+const colorFmt = "%s [%s::b]%s[::]"
+
+func (t TreeNode) toEmojiTitle() (title string) {
+	_, n := client.Namespaced(t.ID)
+	color, status := "white", "OK"
+	if v, ok := t.Extras[StatusKey]; ok {
+		switch v {
+		case ToastStatus:
+			color, status = "orangered", toast
+		case MissingRefStatus:
+			color, status = "orange", toast+"_REF"
+		}
+	}
+	defer func() {
+		if status != "OK" {
+			title += fmt.Sprintf(" [gray::-][yellow:%s:b]%s[gray::-]", color, status)
+		}
+	}()
+
+	title = fmt.Sprintf(colorFmt, toEmoji(t.GVR), color, n)
+	if !t.IsLeaf() {
+		title += fmt.Sprintf("[white::d](%d[-::d])[-::-]", t.CountChildren())
+	}
+
+	info, ok := t.Extras[InfoKey]
+	if !ok {
+		return
+	}
+	title += fmt.Sprintf(" [antiquewhite::][%s][::]", info)
+
+	return
+}
+
+func toEmoji(gvr string) string {
+	if e := v1Emoji(gvr); e != "" {
+		return e
+	}
+	if e := appsEmoji(gvr); e != "" {
+		return e
+	}
+	if e := issueEmoji(gvr); e != "" {
+		return e
+	}
+	switch gvr {
+	case "autoscaling/v1/horizontalpodautoscalers":
+		return "♎️"
+	case "rbac.authorization.k8s.io/v1/clusterrolebindings", "rbac.authorization.k8s.io/v1/clusterroles":
+		return "👩‍"
+	case "rbac.authorization.k8s.io/v1/rolebindings", "rbac.authorization.k8s.io/v1/roles":
+		return "👨🏻‍"
+	case "networking.k8s.io/v1/networkpolicies":
+		return "📕"
+	case "policy/v1beta1/poddisruptionbudgets":
+		return "🏷 "
+	case "policy/v1beta1/podsecuritypolicies":
+		return "👮‍♂️"
+	case "containers":
+		return "🐳"
+	case "report":
+		return "🧼"
+	default:
+		return "📎"
+	}
+}
+
+func issueEmoji(gvr string) string {
+	switch gvr {
+	case "issue_0":
+		return "👍"
+	case "issue_1":
+		return "🔊"
+	case "issue_2":
+		return "☣️ "
+	case "issue_3":
+		return "🧨"
+	default:
+		return ""
+	}
+}
+
+func v1Emoji(gvr string) string {
+	switch gvr {
+	case "v1/namespaces":
+		return "🗂 "
+	case "v1/nodes":
+		return "🖥 "
+	case "v1/pods":
+		return "🚛"
+	case "v1/services":
+		return "💁‍♀️"
+	case "v1/serviceaccounts":
+		return "💳"
+	case "v1/persistentvolumes":
+		return "📚"
+	case "v1/persistentvolumeclaims":
+		return "🎟 "
+	case "v1/secrets":
+		return "🔒"
+	case "v1/configmaps":
+		return "🗺 "
+	default:
+		return ""
+	}
+}
+
+func appsEmoji(gvr string) string {
+	switch gvr {
+	case "apps/v1/deployments":
+		return "🪂"
+	case "apps/v1/statefulsets":
+		return "🎎"
+	case "apps/v1/daemonsets":
+		return "😈"
+	case "apps/v1/replicasets":
+		return "👯‍♂️"
+	default:
+		return ""
+	}
+}
+
+// EmojiInfo returns emoji help.
+func EmojiInfo() map[string]string {
+	GVRs := []string{
+		"containers",
+		"v1/namespaces",
+		"v1/pods",
+		"v1/services",
+		"v1/serviceaccounts",
+		"v1/persistentvolumes",
+		"v1/persistentvolumeclaims",
+		"v1/secrets",
+		"v1/configmaps",
+		"apps/v1/deployments",
+		"apps/v1/statefulsets",
+		"apps/v1/daemonsets",
+	}
+
+	m := make(map[string]string, len(GVRs))
+	for _, g := range GVRs {
+		m[client.NewGVR(g).R()] = toEmoji(g)
+	}
+
+	return m
 }

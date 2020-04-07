@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -22,29 +23,38 @@ import (
 )
 
 const (
-	cacheSize   = 100
-	cacheExpiry = 5 * time.Minute
-	cacheMXKey  = "metrics"
+	cacheSize        = 100
+	cacheExpiry      = 5 * time.Minute
+	cacheMXKey       = "metrics"
+	cacheMXAPIKey    = "metricsAPI"
+	checkConnTimeout = 10 * time.Second
+
+	// CallTimeout represents default api call timeout.
+	CallTimeout = 5 * time.Second
 )
 
 var supportedMetricsAPIVersions = []string{"v1beta1"}
 
-// Authorizer checks what a user can or cannot do to a resource.
-type Authorizer interface {
-	// CanI returns true if the user can use these actions for a given resource.
-	CanI(ns, gvr string, verbs []string) (bool, error)
-}
-
 // APIClient represents a Kubernetes api client.
 type APIClient struct {
-	client       kubernetes.Interface
-	dClient      dynamic.Interface
-	nsClient     dynamic.NamespaceableResourceInterface
-	mxsClient    *versioned.Clientset
-	cachedClient *disk.CachedDiscoveryClient
-	config       *Config
-	mx           sync.Mutex
-	cache        *cache.LRUExpireCache
+	checkClientSet *kubernetes.Clientset
+	client         kubernetes.Interface
+	dClient        dynamic.Interface
+	nsClient       dynamic.NamespaceableResourceInterface
+	mxsClient      *versioned.Clientset
+	cachedClient   *disk.CachedDiscoveryClient
+	config         *Config
+	mx             sync.Mutex
+	cache          *cache.LRUExpireCache
+	metricsAPI     bool
+}
+
+// NewTestClient for testing ONLY!!
+func NewTestClient() *APIClient {
+	return &APIClient{
+		config: NewConfig(nil),
+		cache:  cache.NewLRUExpireCache(cacheSize),
+	}
 }
 
 // InitConnectionOrDie initialize connection from command line args.
@@ -54,8 +64,7 @@ func InitConnectionOrDie(config *Config) *APIClient {
 		config: config,
 		cache:  cache.NewLRUExpireCache(cacheSize),
 	}
-	a.HasMetrics()
-
+	a.metricsAPI = a.supportsMetricsResources()
 	return &a
 }
 
@@ -81,6 +90,39 @@ func makeCacheKey(ns, gvr string, vv []string) string {
 	return ns + ":" + gvr + "::" + strings.Join(vv, ",")
 }
 
+// ActiveCluster returns the current cluster name.
+func (a *APIClient) ActiveCluster() string {
+	c, err := a.config.CurrentClusterName()
+	if err != nil {
+		log.Error().Msgf("Unable to located active cluster")
+		return ""
+	}
+	return c
+}
+
+// IsActiveNamespace returns true if namespaces matches.
+func (a *APIClient) IsActiveNamespace(ns string) bool {
+	if a.ActiveNamespace() == AllNamespaces {
+		return true
+	}
+	return a.ActiveNamespace() == ns
+}
+
+// ActiveNamespace returns the current namespace.
+func (a *APIClient) ActiveNamespace() string {
+	ns, err := a.CurrentNamespaceName()
+	if err != nil {
+		return AllNamespaces
+	}
+	return ns
+}
+
+func (a *APIClient) clearCache() {
+	for _, k := range a.cache.Keys() {
+		a.cache.Remove(k)
+	}
+}
+
 // CanI checks if user has access to a certain resource.
 func (a *APIClient) CanI(ns, gvr string, verbs []string) (auth bool, err error) {
 	if IsClusterWide(ns) {
@@ -93,9 +135,12 @@ func (a *APIClient) CanI(ns, gvr string, verbs []string) (auth bool, err error) 
 		}
 	}
 	dial, sar := a.DialOrDie().AuthorizationV1().SelfSubjectAccessReviews(), makeSAR(ns, gvr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), CallTimeout)
+	defer cancel()
 	for _, v := range verbs {
 		sar.Spec.ResourceAttributes.Verb = v
-		resp, err := dial.Create(sar)
+		resp, err := dial.Create(ctx, sar, metav1.CreateOptions{})
 		if err != nil {
 			log.Warn().Err(err).Msgf("  Dial Failed!")
 			a.cache.Add(key, false, cacheExpiry)
@@ -124,40 +169,46 @@ func (a *APIClient) ServerVersion() (*version.Info, error) {
 
 // ValidNamespaces returns all available namespaces.
 func (a *APIClient) ValidNamespaces() ([]v1.Namespace, error) {
-	nn, err := a.DialOrDie().CoreV1().Namespaces().List(metav1.ListOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), CallTimeout)
+	defer cancel()
+	nn, err := a.DialOrDie().CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
 	return nn.Items, nil
 }
 
-// IsNamespaced check on server if given resource is namespaced
-func (a *APIClient) IsNamespaced(res string) bool {
-	list, _ := a.CachedDiscoveryOrDie().ServerPreferredResources()
-	for _, l := range list {
-		for _, r := range l.APIResources {
-			if r.Name == res {
-				return r.Namespaced
-			}
+// CheckConnectivity return true if api server is cool or false otherwise.
+func (a *APIClient) CheckConnectivity() (status bool) {
+	defer func() {
+		if !status {
+			a.clearCache()
 		}
-	}
-	return false
-}
+		if err := recover(); err != nil {
+			status = false
+		}
+	}()
 
-// SupportsResource checks for resource supported version against the server.
-func (a *APIClient) SupportsResource(group string) bool {
-	list, err := a.CachedDiscoveryOrDie().ServerPreferredResources()
-	if err != nil {
-		log.Error().Err(err).Msg("Unable to dial api server")
-		return false
-	}
-	for _, l := range list {
-		log.Debug().Msgf(">>> Group %s", l.GroupVersion)
-		if l.GroupVersion == group {
-			return true
+	if a.checkClientSet == nil {
+		cfg, err := a.config.flags.ToRESTConfig()
+		if err != nil {
+			return
+		}
+		cfg.Timeout = checkConnTimeout
+
+		if a.checkClientSet, err = kubernetes.NewForConfig(cfg); err != nil {
+			log.Error().Err(err).Msgf("Unable to connect to api server")
+			return
 		}
 	}
-	return false
+
+	if _, err := a.checkClientSet.ServerVersion(); err == nil {
+		status = true
+	} else {
+		log.Error().Err(err).Msgf("K9s can't connect to cluster")
+	}
+
+	return
 }
 
 // Config return a kubernetes configuration.
@@ -167,6 +218,9 @@ func (a *APIClient) Config() *Config {
 
 // HasMetrics returns true if the cluster supports metrics.
 func (a *APIClient) HasMetrics() bool {
+	if !a.supportsMetricsResources() {
+		return false
+	}
 	v, ok := a.cache.Get(cacheMXKey)
 	if ok {
 		flag, k := v.(bool)
@@ -179,9 +233,12 @@ func (a *APIClient) HasMetrics() bool {
 		a.cache.Add(cacheMXKey, flag, cacheExpiry)
 		return flag
 	}
-
-	if _, err := dial.MetricsV1beta1().NodeMetricses().List(metav1.ListOptions{Limit: 1}); err == nil {
+	ctx, cancel := context.WithTimeout(context.Background(), CallTimeout)
+	defer cancel()
+	if _, err := dial.MetricsV1beta1().NodeMetricses().List(ctx, metav1.ListOptions{Limit: 1}); err == nil {
 		flag = true
+	} else {
+		log.Error().Err(err).Msgf("List metrics failed")
 	}
 	a.cache.Add(cacheMXKey, flag, cacheExpiry)
 
@@ -196,7 +253,7 @@ func (a *APIClient) DialOrDie() kubernetes.Interface {
 
 	var err error
 	if a.client, err = kubernetes.NewForConfig(a.RestConfigOrDie()); err != nil {
-		log.Fatal().Msgf("Unable to connect to api server %v", err)
+		log.Fatal().Err(err).Msgf("Unable to connect to api server")
 	}
 	return a.client
 }
@@ -205,7 +262,7 @@ func (a *APIClient) DialOrDie() kubernetes.Interface {
 func (a *APIClient) RestConfigOrDie() *restclient.Config {
 	cfg, err := a.config.RESTConfig()
 	if err != nil {
-		log.Panic().Msgf("Unable to connect to api server %v", err)
+		log.Fatal().Err(err).Msgf("Unable to connect to api server")
 	}
 	return cfg
 }
@@ -260,37 +317,53 @@ func (a *APIClient) MXDial() (*versioned.Clientset, error) {
 	return a.mxsClient, err
 }
 
-// SwitchContextOrDie handles kubeconfig context switches.
-func (a *APIClient) SwitchContextOrDie(ctx string) {
+// SwitchContext handles kubeconfig context switches.
+func (a *APIClient) SwitchContext(ctx string) error {
 	currentCtx, err := a.config.CurrentContextName()
 	if err != nil {
-		log.Fatal().Err(err).Msg("Fetching current context")
+		return err
+	}
+	if currentCtx == ctx {
+		return nil
 	}
 
-	if currentCtx != ctx {
-		a.cachedClient = nil
-		a.reset()
-		if err := a.config.SwitchContext(ctx); err != nil {
-			log.Fatal().Err(err).Msg("Switching context")
-		}
-		_ = a.supportsMxServer()
+	if err := a.config.SwitchContext(ctx); err != nil {
+		return err
 	}
+	a.clearCache()
+	a.reset()
+	a.metricsAPI = a.supportsMetricsResources()
+	ResetMetrics()
+
+	return nil
 }
 
 func (a *APIClient) reset() {
 	a.mx.Lock()
 	defer a.mx.Unlock()
 
+	a.cache = cache.NewLRUExpireCache(cacheSize)
 	a.client, a.dClient, a.nsClient, a.mxsClient = nil, nil, nil, nil
+	a.cachedClient = nil
 }
 
-func (a *APIClient) supportsMxServer() (supported bool) {
+func (a *APIClient) supportsMetricsResources() (supported bool) {
 	defer func() {
-		a.cache.Add(cacheMXKey, supported, cacheExpiry)
+		a.cache.Add(cacheMXAPIKey, supported, cacheExpiry)
 	}()
+
+	if v, ok := a.cache.Get(cacheMXAPIKey); ok {
+		flag, k := v.(bool)
+		supported = k && flag
+		return
+	}
+	if a.config == nil || a.config.flags == nil {
+		return
+	}
 
 	apiGroups, err := a.CachedDiscoveryOrDie().ServerGroups()
 	if err != nil {
+		log.Debug().Msgf("Unable to access servergroups %#v", err)
 		return
 	}
 	for _, grp := range apiGroups.Groups {
@@ -316,20 +389,4 @@ func checkMetricsVersion(grp metav1.APIGroup) bool {
 	}
 
 	return false
-}
-
-// SupportsRes checks latest supported version.
-func (a *APIClient) SupportsRes(group string, versions []string) (string, bool, error) {
-	apiGroups, err := a.CachedDiscoveryOrDie().ServerGroups()
-	if err != nil {
-		return "", false, err
-	}
-	for _, grp := range apiGroups.Groups {
-		if grp.Name != group {
-			continue
-		}
-		return grp.Versions[len(grp.Versions)-1].Version, true, nil
-	}
-
-	return "", false, nil
 }

@@ -1,6 +1,7 @@
 package render
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -37,17 +38,17 @@ type ContainerWithMetrics interface {
 type Container struct{}
 
 // ColorerFunc colors a resource row.
-func (Container) ColorerFunc() ColorerFunc {
-	return func(ns string, r RowEvent) tcell.Color {
-		c := DefaultColorer(ns, r)
-
-		readyCol := 2
-		if strings.TrimSpace(r.Row.Fields[readyCol]) == "false" {
-			c = ErrColor
+func (c Container) ColorerFunc() ColorerFunc {
+	return func(ns string, h Header, re RowEvent) tcell.Color {
+		if !Happy(ns, h, re.Row) {
+			return ErrColor
 		}
 
-		stateCol := readyCol + 1
-		switch strings.TrimSpace(r.Row.Fields[stateCol]) {
+		stateCol := h.IndexOf("STATE", true)
+		if stateCol == -1 {
+			return DefaultColorer(ns, h, re)
+		}
+		switch strings.TrimSpace(re.Row.Fields[stateCol]) {
 		case ContainerCreating, PodInitializing:
 			return AddColor
 		case Terminating, Initialized:
@@ -55,30 +56,32 @@ func (Container) ColorerFunc() ColorerFunc {
 		case Completed:
 			return CompletedColor
 		case Running:
+			return DefaultColorer(ns, h, re)
 		default:
-			c = ErrColor
+			return ErrColor
 		}
-
-		return c
 	}
 }
 
 // Header returns a header row.
-func (Container) Header(ns string) HeaderRow {
-	return HeaderRow{
-		Header{Name: "NAME"},
-		Header{Name: "IMAGE"},
-		Header{Name: "READY"},
-		Header{Name: "STATE"},
-		Header{Name: "INIT"},
-		Header{Name: "RS", Align: tview.AlignRight},
-		Header{Name: "PROBES(L:R)"},
-		Header{Name: "CPU", Align: tview.AlignRight},
-		Header{Name: "MEM", Align: tview.AlignRight},
-		Header{Name: "%CPU", Align: tview.AlignRight},
-		Header{Name: "%MEM", Align: tview.AlignRight},
-		Header{Name: "PORTS"},
-		Header{Name: "AGE", Decorator: AgeDecorator},
+func (Container) Header(ns string) Header {
+	return Header{
+		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "IMAGE"},
+		HeaderColumn{Name: "READY"},
+		HeaderColumn{Name: "STATE"},
+		HeaderColumn{Name: "INIT"},
+		HeaderColumn{Name: "RESTARTS", Align: tview.AlignRight},
+		HeaderColumn{Name: "PROBES(L:R)"},
+		HeaderColumn{Name: "CPU", Align: tview.AlignRight, MX: true},
+		HeaderColumn{Name: "MEM", Align: tview.AlignRight, MX: true},
+		HeaderColumn{Name: "%CPU/R", Align: tview.AlignRight, MX: true},
+		HeaderColumn{Name: "%MEM/R", Align: tview.AlignRight, MX: true},
+		HeaderColumn{Name: "%CPU/L", Align: tview.AlignRight, MX: true},
+		HeaderColumn{Name: "%MEM/L", Align: tview.AlignRight, MX: true},
+		HeaderColumn{Name: "PORTS"},
+		HeaderColumn{Name: "VALID", Wide: true},
+		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
 	}
 }
 
@@ -89,44 +92,58 @@ func (c Container) Render(o interface{}, name string, r *Row) error {
 		return fmt.Errorf("Expected ContainerRes, but got %T", o)
 	}
 
-	cur, perc := gatherMetrics(co.Container, co.MX)
+	cur, perc, limit := gatherMetrics(co.Container, co.MX)
 	ready, state, restarts := "false", MissingValue, "0"
 	if co.Status != nil {
-		ready, state, restarts = boolToStr(co.Status.Ready), toState(co.Status.State), strconv.Itoa(int(co.Status.RestartCount))
+		ready, state, restarts = boolToStr(co.Status.Ready), ToContainerState(co.Status.State), strconv.Itoa(int(co.Status.RestartCount))
 	}
 
 	r.ID = co.Container.Name
-	r.Fields = make(Fields, 0, len(c.Header(client.AllNamespaces)))
-	r.Fields = append(r.Fields,
+	r.Fields = Fields{
 		co.Container.Name,
 		co.Container.Image,
 		ready,
 		state,
 		boolToStr(co.IsInit),
 		restarts,
-		probe(co.Container.LivenessProbe)+":"+probe(co.Container.ReadinessProbe),
+		probe(co.Container.LivenessProbe) + ":" + probe(co.Container.ReadinessProbe),
 		cur.cpu,
 		cur.mem,
 		perc.cpu,
 		perc.mem,
-		toStrPorts(co.Container.Ports),
+		limit.cpu,
+		limit.mem,
+		ToContainerPorts(co.Container.Ports),
+		asStatus(c.diagnose(state, ready)),
 		toAge(co.Age),
-	)
+	}
 
+	return nil
+}
+
+// Happy returns true if resoure is happy, false otherwise
+func (Container) diagnose(state, ready string) error {
+	if state == "Completed" {
+		return nil
+	}
+
+	if ready == "false" {
+		return errors.New("container is not ready")
+	}
 	return nil
 }
 
 // ----------------------------------------------------------------------------
 // Helpers...
 
-func gatherMetrics(co *v1.Container, mx *mv1beta1.ContainerMetrics) (c, p metric) {
-	c, p = noMetric(), noMetric()
+func gatherMetrics(co *v1.Container, mx *mv1beta1.ContainerMetrics) (c, p, l metric) {
+	c, p, l = noMetric(), noMetric(), noMetric()
 	if mx == nil {
 		return
 	}
 
 	cpu := mx.Usage.Cpu().MilliValue()
-	mem := ToMB(mx.Usage.Memory().Value())
+	mem := client.ToMB(mx.Usage.Memory().Value())
 	c = metric{
 		cpu: ToMillicore(cpu),
 		mem: ToMi(mem),
@@ -134,16 +151,25 @@ func gatherMetrics(co *v1.Container, mx *mv1beta1.ContainerMetrics) (c, p metric
 
 	rcpu, rmem := containerResources(*co)
 	if rcpu != nil {
-		p.cpu = AsPerc(toPerc(float64(cpu), float64(rcpu.MilliValue())))
+		p.cpu = IntToStr(client.ToPercentage(cpu, rcpu.MilliValue()))
 	}
 	if rmem != nil {
-		p.mem = AsPerc(toPerc(mem, ToMB(rmem.Value())))
+		p.mem = IntToStr(client.ToPercentage(mem, client.ToMB(rmem.Value())))
+	}
+
+	lcpu, lmem := containerLimits(*co)
+	if lcpu != nil {
+		l.cpu = IntToStr(client.ToPercentage(cpu, lcpu.MilliValue()))
+	}
+	if lmem != nil {
+		l.mem = IntToStr(client.ToPercentage(mem, client.ToMB(lmem.Value())))
 	}
 
 	return
 }
 
-func toStrPorts(pp []v1.ContainerPort) string {
+// ToContainerPorts returns container ports as a string.
+func ToContainerPorts(pp []v1.ContainerPort) string {
 	ports := make([]string, len(pp))
 	for i, p := range pp {
 		if len(p.Name) > 0 {
@@ -158,7 +184,8 @@ func toStrPorts(pp []v1.ContainerPort) string {
 	return strings.Join(ports, ",")
 }
 
-func toState(s v1.ContainerState) string {
+// ToContainerState returns container state as a string.
+func ToContainerState(s v1.ContainerState) string {
 	switch {
 	case s.Waiting != nil:
 		if s.Waiting.Reason != "" {
@@ -170,7 +197,7 @@ func toState(s v1.ContainerState) string {
 		if s.Terminated.Reason != "" {
 			return s.Terminated.Reason
 		}
-		return "Terminated"
+		return "Terminating"
 	case s.Running != nil:
 		return "Running"
 	default:

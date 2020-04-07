@@ -37,11 +37,11 @@ func TestTableNew(t *testing.T) {
 	v.Init(makeContext())
 
 	data := render.NewTableData()
-	data.Header = render.HeaderRow{
-		render.Header{Name: "NAMESPACE"},
-		render.Header{Name: "NAME", Align: tview.AlignRight},
-		render.Header{Name: "FRED"},
-		render.Header{Name: "AGE", Decorator: render.AgeDecorator},
+	data.Header = render.Header{
+		render.HeaderColumn{Name: "NAMESPACE"},
+		render.HeaderColumn{Name: "NAME", Align: tview.AlignRight},
+		render.HeaderColumn{Name: "FRED"},
+		render.HeaderColumn{Name: "AGE", Time: true, Decorator: render.AgeDecorator},
 	}
 	data.RowEvents = render.RowEvents{
 		render.RowEvent{
@@ -65,23 +65,23 @@ func TestTableViewFilter(t *testing.T) {
 	v := NewTable(client.NewGVR("test"))
 	v.Init(makeContext())
 	v.SetModel(&testTableModel{})
-	v.SearchBuff().SetActive(true)
-	v.SearchBuff().Set("blee")
+	v.CmdBuff().SetActive(true)
+	v.CmdBuff().SetText("blee")
 	v.Refresh()
-	assert.Equal(t, 2, v.GetRowCount())
+	assert.Equal(t, 1, v.GetRowCount())
 }
 
 func TestTableViewSort(t *testing.T) {
 	v := NewTable(client.NewGVR("test"))
 	v.Init(makeContext())
 	v.SetModel(&testTableModel{})
-	v.SortColCmd(1, true)(nil)
+	v.SortColCmd("NAME", true)(nil)
 	assert.Equal(t, 3, v.GetRowCount())
-	assert.Equal(t, "blee", v.GetCell(1, 1).Text)
+	assert.Equal(t, "blee", v.GetCell(1, 0).Text)
 
 	v.SortInvertCmd(nil)
 	assert.Equal(t, 3, v.GetRowCount())
-	assert.Equal(t, "fred", v.GetCell(1, 1).Text)
+	assert.Equal(t, "fred", v.GetCell(1, 0).Text)
 }
 
 // ----------------------------------------------------------------------------
@@ -89,14 +89,16 @@ func TestTableViewSort(t *testing.T) {
 
 type testTableModel struct{}
 
-var _ ui.Tabular = &testTableModel{}
+var _ ui.Tabular = (*testTableModel)(nil)
 
 func (t *testTableModel) SetInstance(string)              {}
 func (t *testTableModel) Empty() bool                     { return false }
+func (t *testTableModel) HasMetrics() bool                { return true }
 func (t *testTableModel) Peek() render.TableData          { return makeTableData() }
 func (t *testTableModel) ClusterWide() bool               { return false }
 func (t *testTableModel) GetNamespace() string            { return "blee" }
 func (t *testTableModel) SetNamespace(string)             {}
+func (t *testTableModel) ToggleToast()                    {}
 func (t *testTableModel) AddListener(model.TableListener) {}
 func (t *testTableModel) Watch(context.Context)           {}
 func (t *testTableModel) Get(context.Context, string) (runtime.Object, error) {
@@ -118,11 +120,11 @@ func (t *testTableModel) SetRefreshRate(time.Duration) {}
 func makeTableData() render.TableData {
 	t := render.NewTableData()
 
-	t.Header = render.HeaderRow{
-		render.Header{Name: "NAMESPACE"},
-		render.Header{Name: "NAME", Align: tview.AlignRight},
-		render.Header{Name: "FRED"},
-		render.Header{Name: "AGE", Decorator: render.AgeDecorator},
+	t.Header = render.Header{
+		render.HeaderColumn{Name: "NAMESPACE"},
+		render.HeaderColumn{Name: "NAME", Align: tview.AlignRight},
+		render.HeaderColumn{Name: "FRED"},
+		render.HeaderColumn{Name: "AGE", Time: true, Decorator: render.AgeDecorator},
 	}
 	t.RowEvents = render.RowEvents{
 		render.RowEvent{

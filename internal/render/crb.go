@@ -18,13 +18,14 @@ func (ClusterRoleBinding) ColorerFunc() ColorerFunc {
 }
 
 // Header returns a header rbw.
-func (ClusterRoleBinding) Header(string) HeaderRow {
-	return HeaderRow{
-		Header{Name: "NAME"},
-		Header{Name: "CLUSTERROLE"},
-		Header{Name: "KIND"},
-		Header{Name: "SUBJECTS"},
-		Header{Name: "AGE", Decorator: AgeDecorator},
+func (ClusterRoleBinding) Header(string) Header {
+	return Header{
+		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "CLUSTERROLE"},
+		HeaderColumn{Name: "SUBJECT-KIND"},
+		HeaderColumn{Name: "SUBJECTS"},
+		HeaderColumn{Name: "LABELS", Wide: true},
+		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
 	}
 }
 
@@ -48,6 +49,7 @@ func (ClusterRoleBinding) Render(o interface{}, ns string, r *Row) error {
 		crb.RoleRef.Name,
 		kind,
 		ss,
+		mapToStr(crb.Labels),
 		toAge(crb.ObjectMeta.CreationTimestamp),
 	}
 

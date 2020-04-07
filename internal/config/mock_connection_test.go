@@ -82,23 +82,19 @@ func (mock *MockConnection) Config() *client.Config {
 	return ret0
 }
 
-func (mock *MockConnection) CurrentNamespaceName() (string, error) {
+func (mock *MockConnection) CheckConnectivity() bool {
 	if mock == nil {
 		panic("mock must not be nil. Use myMock := NewMockConnection().")
 	}
 	params := []pegomock.Param{}
-	result := pegomock.GetGenericMockFrom(mock).Invoke("CurrentNamespaceName", params, []reflect.Type{reflect.TypeOf((*string)(nil)).Elem(), reflect.TypeOf((*error)(nil)).Elem()})
-	var ret0 string
-	var ret1 error
+	result := pegomock.GetGenericMockFrom(mock).Invoke("CheckConnectivity", params, []reflect.Type{reflect.TypeOf((*bool)(nil)).Elem()})
+	var ret0 bool
 	if len(result) != 0 {
 		if result[0] != nil {
-			ret0 = result[0].(string)
-		}
-		if result[1] != nil {
-			ret1 = result[1].(error)
+			ret0 = result[0].(bool)
 		}
 	}
-	return ret0, ret1
+	return ret0
 }
 
 func (mock *MockConnection) DialOrDie() kubernetes.Interface {
@@ -137,6 +133,51 @@ func (mock *MockConnection) HasMetrics() bool {
 	}
 	params := []pegomock.Param{}
 	result := pegomock.GetGenericMockFrom(mock).Invoke("HasMetrics", params, []reflect.Type{reflect.TypeOf((*bool)(nil)).Elem()})
+	var ret0 bool
+	if len(result) != 0 {
+		if result[0] != nil {
+			ret0 = result[0].(bool)
+		}
+	}
+	return ret0
+}
+
+func (mock *MockConnection) ActiveCluster() string {
+	if mock == nil {
+		panic("mock must not be nil. Use myMock := NewMockConnection().")
+	}
+	params := []pegomock.Param{}
+	result := pegomock.GetGenericMockFrom(mock).Invoke("ActiveCluster", params, []reflect.Type{reflect.TypeOf((*string)(nil)).Elem()})
+	var ret0 string
+	if len(result) != 0 {
+		if result[0] != nil {
+			ret0 = result[0].(string)
+		}
+	}
+	return ret0
+}
+
+func (mock *MockConnection) ActiveNamespace() string {
+	if mock == nil {
+		panic("mock must not be nil. Use myMock := NewMockConnection().")
+	}
+	params := []pegomock.Param{}
+	result := pegomock.GetGenericMockFrom(mock).Invoke("ActiveNamespace", params, []reflect.Type{reflect.TypeOf((*string)(nil)).Elem()})
+	var ret0 string
+	if len(result) != 0 {
+		if result[0] != nil {
+			ret0 = result[0].(string)
+		}
+	}
+	return ret0
+}
+
+func (mock *MockConnection) IsActiveNamespace(s string) bool {
+	if mock == nil {
+		panic("mock must not be nil. Use myMock := NewMockConnection().")
+	}
+	params := []pegomock.Param{}
+	result := pegomock.GetGenericMockFrom(mock).Invoke("IsActiveNamespace", params, []reflect.Type{reflect.TypeOf((*bool)(nil)).Elem()})
 	var ret0 bool
 	if len(result) != 0 {
 		if result[0] != nil {
@@ -271,12 +312,14 @@ func (mock *MockConnection) SupportsResource(_param0 string) bool {
 	return ret0
 }
 
-func (mock *MockConnection) SwitchContextOrDie(_param0 string) {
+func (mock *MockConnection) SwitchContext(_param0 string) error {
 	if mock == nil {
 		panic("mock must not be nil. Use myMock := NewMockConnection().")
 	}
 	params := []pegomock.Param{_param0}
-	pegomock.GetGenericMockFrom(mock).Invoke("SwitchContextOrDie", params, []reflect.Type{})
+	pegomock.GetGenericMockFrom(mock).Invoke("SwitchContext", params, []reflect.Type{reflect.TypeOf((*error)(nil)).Elem()})
+
+	return nil
 }
 
 func (mock *MockConnection) ValidNamespaces() ([]v1.Namespace, error) {

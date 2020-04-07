@@ -18,11 +18,13 @@ func (StorageClass) ColorerFunc() ColorerFunc {
 }
 
 // Header returns a header row.
-func (StorageClass) Header(ns string) HeaderRow {
-	return HeaderRow{
-		Header{Name: "NAME"},
-		Header{Name: "PROVISIONER"},
-		Header{Name: "AGE", Decorator: AgeDecorator},
+func (StorageClass) Header(ns string) Header {
+	return Header{
+		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "PROVISIONER"},
+		HeaderColumn{Name: "LABELS", Wide: true},
+		HeaderColumn{Name: "VALID", Wide: true},
+		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
 	}
 }
 
@@ -42,6 +44,8 @@ func (StorageClass) Render(o interface{}, ns string, r *Row) error {
 	r.Fields = Fields{
 		sc.Name,
 		string(sc.Provisioner),
+		mapToStr(sc.Labels),
+		"",
 		toAge(sc.ObjectMeta.CreationTimestamp),
 	}
 

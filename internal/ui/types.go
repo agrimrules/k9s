@@ -15,9 +15,8 @@ type (
 
 	// SortColumn represents a sortable column.
 	SortColumn struct {
-		index    int
-		colCount int
-		asc      bool
+		name string
+		asc  bool
 	}
 )
 
@@ -53,6 +52,7 @@ type Tabular interface {
 	Namespaceable
 	Lister
 
+	// SetInstance sets parent resource path.
 	SetInstance(string)
 
 	// Empty returns true if model has no data.

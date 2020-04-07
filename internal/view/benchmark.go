@@ -28,7 +28,7 @@ func NewBenchmark(gvr client.GVR) ResourceViewer {
 	b.GetTable().SetBorderFocusColor(tcell.ColorSeaGreen)
 	b.GetTable().SetSelectedStyle(tcell.ColorWhite, tcell.ColorSeaGreen, tcell.AttrNone)
 	b.GetTable().SetColorerFn(render.Benchmark{}.ColorerFunc())
-	b.GetTable().SetSortCol(b.GetTable().NameColIndex()+7, 0, true)
+	b.GetTable().SetSortCol(ageCol, true)
 	b.SetContextFn(b.benchContext)
 	b.GetTable().SetEnterFn(b.viewBench)
 
@@ -46,7 +46,7 @@ func (b *Benchmark) viewBench(app *App, model ui.Tabular, gvr, path string) {
 		return
 	}
 
-	details := NewDetails(b.App(), "Benchmark", fileToSubject(path)).Update(data)
+	details := NewDetails(b.App(), "Results", fileToSubject(path), false).Update(data)
 	if err := app.inject(details); err != nil {
 		app.Flash().Err(err)
 	}

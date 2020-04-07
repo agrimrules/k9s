@@ -22,21 +22,28 @@ const (
 
 	// ClusterScope designates a resource is not namespaced.
 	ClusterScope = "-"
-)
 
-const (
+	// NotNamespaced designates a non resource namespace.
+	NotNamespaced = "*"
+
 	// CreateVerb represents create access on a resource.
 	CreateVerb = "create"
+
 	// UpdateVerb represents an update access on a resource.
 	UpdateVerb = "update"
+
 	// PatchVerb represents a patch access on a resource.
 	PatchVerb = "patch"
+
 	// DeleteVerb represents a delete access on a resource.
 	DeleteVerb = "delete"
+
 	// GetVerb represents a get access on a resource.
 	GetVerb = "get"
+
 	// ListVerb represents a list access on a resource.
 	ListVerb = "list"
+
 	// WatchVerb represents a watch access on a resource.
 	WatchVerb = "watch"
 )
@@ -52,48 +59,79 @@ var (
 	ReadAllAccess = []string{GetVerb, ListVerb, WatchVerb}
 )
 
+// Authorizer checks what a user can or cannot do to a resource.
+type Authorizer interface {
+	// CanI returns true if the user can use these actions for a given resource.
+	CanI(ns, gvr string, verbs []string) (bool, error)
+}
+
 // Connection represents a Kubenetes apiserver connection.
-// BOZO!! Refactor!
 type Connection interface {
 	Authorizer
 
+	// Config returns current config.
 	Config() *Config
+
+	// DialOrDie connects to api server.
 	DialOrDie() kubernetes.Interface
-	SwitchContextOrDie(ctx string)
+
+	// SwitchContext switches cluster based on context.
+	SwitchContext(ctx string) error
+
+	// CachedDiscoveryOrDie connects to discovery client.
 	CachedDiscoveryOrDie() *disk.CachedDiscoveryClient
+
+	// RestConfigOrDie connects to rest client.
 	RestConfigOrDie() *restclient.Config
+
+	// MXDial connects to metrics server.
 	MXDial() (*versioned.Clientset, error)
+
+	// DynDialOrDie connects to dynamic client.
 	DynDialOrDie() dynamic.Interface
+
+	// HasMetrics checks if metrics server is available.
 	HasMetrics() bool
-	IsNamespaced(n string) bool
-	SupportsResource(group string) bool
+
+	// ValidNamespaces returns all available namespaces.
 	ValidNamespaces() ([]v1.Namespace, error)
-	SupportsRes(grp string, versions []string) (string, bool, error)
+
+	// ServerVersion returns current server version.
 	ServerVersion() (*version.Info, error)
-	CurrentNamespaceName() (string, error)
+
+	// CheckConnectivity checks if api server connection is happy or not.
+	CheckConnectivity() bool
+
+	// ActiveCluster returns the current cluster name.
+	ActiveCluster() string
+
+	// ActiveNamespace returns the current namespace.
+	ActiveNamespace() string
+
+	// IsActiveNamespace checks if given ns is active.
+	IsActiveNamespace(string) bool
 }
 
-type currentMetrics struct {
-	CurrentCPU int64
-	CurrentMEM float64
+// CurrentMetrics tracks current cpu/mem.
+type CurrentMetrics struct {
+	CurrentCPU, CurrentMEM, CurrentEphemeral int64
 }
 
 // PodMetrics represent an aggregation of all pod containers metrics.
-type PodMetrics currentMetrics
+type PodMetrics CurrentMetrics
 
 // NodeMetrics describes raw node metrics.
 type NodeMetrics struct {
-	currentMetrics
-	AvailCPU int64
-	AvailMEM float64
-	TotalCPU int64
-	TotalMEM float64
+	CurrentMetrics
+
+	AllocatableCPU, AllocatableMEM, AllocatableEphemeral int64
+	AvailableCPU, AvailableMEM, AvailableEphemeral       int64
+	TotalCPU, TotalMEM, TotalEphemeral                   int64
 }
 
 // ClusterMetrics summarizes total node metrics as percentages.
 type ClusterMetrics struct {
-	PercCPU float64
-	PercMEM float64
+	PercCPU, PercMEM, PercEphemeral int
 }
 
 // NodesMetrics tracks usage metrics per nodes.

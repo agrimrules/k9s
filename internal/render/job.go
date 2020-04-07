@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/derailed/k9s/internal/client"
-	"github.com/rs/zerolog/log"
 	batchv1 "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/duration"
@@ -24,25 +24,22 @@ func (Job) ColorerFunc() ColorerFunc {
 }
 
 // Header returns a header row.
-func (Job) Header(ns string) HeaderRow {
-	var h HeaderRow
-	if client.IsAllNamespaces(ns) {
-		h = append(h, Header{Name: "NAMESPACE"})
+func (Job) Header(ns string) Header {
+	return Header{
+		HeaderColumn{Name: "NAMESPACE"},
+		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "COMPLETIONS"},
+		HeaderColumn{Name: "DURATION"},
+		HeaderColumn{Name: "SELECTOR", Wide: true},
+		HeaderColumn{Name: "CONTAINERS", Wide: true},
+		HeaderColumn{Name: "IMAGES", Wide: true},
+		HeaderColumn{Name: "VALID", Wide: true},
+		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
 	}
-
-	return append(h,
-		Header{Name: "NAME"},
-		Header{Name: "COMPLETIONS"},
-		Header{Name: "DURATION"},
-		Header{Name: "CONTAINERS"},
-		Header{Name: "IMAGES"},
-		Header{Name: "AGE", Decorator: AgeDecorator},
-	)
 }
 
 // Render renders a K8s resource to screen.
 func (j Job) Render(o interface{}, ns string, r *Row) error {
-	log.Debug().Msgf("JOB RENDER %q", ns)
 	raw, ok := o.(*unstructured.Unstructured)
 	if !ok {
 		return fmt.Errorf("Expected Job, but got %T", o)
@@ -52,22 +49,34 @@ func (j Job) Render(o interface{}, ns string, r *Row) error {
 	if err != nil {
 		return err
 	}
+	ready := toCompletion(job.Spec, job.Status)
+
+	cc, ii := toContainers(job.Spec.Template.Spec)
 
 	r.ID = client.MetaFQN(job.ObjectMeta)
-	r.Fields = make(Fields, 0, len(j.Header(ns)))
-	if client.IsAllNamespaces(ns) {
-		r.Fields = append(r.Fields, job.Namespace)
-	}
-	cc, ii := toContainers(job.Spec.Template.Spec)
-	r.Fields = append(r.Fields,
+	r.Fields = Fields{
+		job.Namespace,
 		job.Name,
-		toCompletion(job.Spec, job.Status),
+		ready,
 		toDuration(job.Status),
+		jobSelector(job.Spec),
 		cc,
 		ii,
+		asStatus(j.diagnose(ready, job.Status.CompletionTime)),
 		toAge(job.ObjectMeta.CreationTimestamp),
-	)
+	}
 
+	return nil
+}
+
+func (Job) diagnose(ready string, completed *metav1.Time) error {
+	if completed == nil {
+		return nil
+	}
+	tokens := strings.Split(ready, "/")
+	if tokens[0] != tokens[1] {
+		return fmt.Errorf("expecting %s completion got %s", tokens[1], tokens[0])
+	}
 	return nil
 }
 

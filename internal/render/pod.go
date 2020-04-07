@@ -13,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/kubernetes/pkg/util/node"
 	mv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
@@ -22,18 +21,14 @@ type Pod struct{}
 
 // ColorerFunc colors a resource row.
 func (p Pod) ColorerFunc() ColorerFunc {
-	return func(ns string, re RowEvent) tcell.Color {
-		c := DefaultColorer(ns, re)
+	return func(ns string, h Header, re RowEvent) tcell.Color {
+		c := DefaultColorer(ns, h, re)
 
-		readyCol := 2
-		if !client.IsAllNamespaces(ns) {
-			readyCol--
+		statusCol := h.IndexOf("STATUS", true)
+		if statusCol == -1 {
+			return c
 		}
-		statusCol := readyCol + 1
-
-		ready, status := strings.TrimSpace(re.Row.Fields[readyCol]), strings.TrimSpace(re.Row.Fields[statusCol])
-		c = p.checkReadyCol(ready, status, c)
-
+		status := strings.TrimSpace(re.Row.Fields[statusCol])
 		switch status {
 		case ContainerCreating, PodInitializing:
 			c = AddColor
@@ -42,49 +37,42 @@ func (p Pod) ColorerFunc() ColorerFunc {
 		case Completed:
 			c = CompletedColor
 		case Running:
+			c = StdColor
+			if !Happy(ns, h, re.Row) {
+				c = ErrColor
+			}
 		case Terminating:
 			c = KillColor
 		default:
-			c = ErrColor
+			if !Happy(ns, h, re.Row) {
+				c = ErrColor
+			}
 		}
-
 		return c
 	}
-}
-
-func (Pod) checkReadyCol(readyCol, statusCol string, c tcell.Color) tcell.Color {
-	if statusCol == "Completed" {
-		return c
-	}
-
-	tokens := strings.Split(readyCol, "/")
-	if len(tokens) == 2 && (tokens[0] == "0" || tokens[0] != tokens[1]) {
-		return ErrColor
-	}
-	return c
 }
 
 // Header returns a header row.
-func (Pod) Header(ns string) HeaderRow {
-	var h HeaderRow
-	if client.IsAllNamespaces(ns) {
-		h = append(h, Header{Name: "NAMESPACE"})
+func (Pod) Header(ns string) Header {
+	return Header{
+		HeaderColumn{Name: "NAMESPACE"},
+		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "READY"},
+		HeaderColumn{Name: "RESTARTS", Align: tview.AlignRight},
+		HeaderColumn{Name: "STATUS"},
+		HeaderColumn{Name: "CPU", Align: tview.AlignRight, MX: true},
+		HeaderColumn{Name: "MEM", Align: tview.AlignRight, MX: true},
+		HeaderColumn{Name: "%CPU/R", Align: tview.AlignRight, MX: true},
+		HeaderColumn{Name: "%MEM/R", Align: tview.AlignRight, MX: true},
+		HeaderColumn{Name: "%CPU/L", Align: tview.AlignRight, MX: true},
+		HeaderColumn{Name: "%MEM/L", Align: tview.AlignRight, MX: true},
+		HeaderColumn{Name: "IP"},
+		HeaderColumn{Name: "NODE"},
+		HeaderColumn{Name: "QOS", Wide: true},
+		HeaderColumn{Name: "LABELS", Wide: true},
+		HeaderColumn{Name: "VALID", Wide: true},
+		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
 	}
-
-	return append(h,
-		Header{Name: "NAME"},
-		Header{Name: "READY"},
-		Header{Name: "STATUS"},
-		Header{Name: "RESTART", Align: tview.AlignRight},
-		Header{Name: "CPU", Align: tview.AlignRight},
-		Header{Name: "MEM", Align: tview.AlignRight},
-		Header{Name: "%CPU", Align: tview.AlignRight},
-		Header{Name: "%MEM", Align: tview.AlignRight},
-		Header{Name: "IP"},
-		Header{Name: "NODE"},
-		Header{Name: "QOS"},
-		Header{Name: "AGE", Decorator: AgeDecorator},
-	)
 }
 
 // Render renders a K8s resource to screen.
@@ -101,28 +89,40 @@ func (p Pod) Render(o interface{}, ns string, r *Row) error {
 	}
 
 	ss := po.Status.ContainerStatuses
-	cr, _, rc := p.statuses(ss)
+	cr, _, rc := p.Statuses(ss)
 	c, perc := p.gatherPodMX(&po, pwm.MX)
-
+	phase := p.Phase(&po)
 	r.ID = client.MetaFQN(po.ObjectMeta)
-	r.Fields = make(Fields, 0, len(p.Header(ns)))
-	if client.IsAllNamespaces(ns) {
-		r.Fields = append(r.Fields, po.Namespace)
-	}
-	r.Fields = append(r.Fields,
+	r.Fields = Fields{
+		po.Namespace,
 		po.ObjectMeta.Name,
-		strconv.Itoa(cr)+"/"+strconv.Itoa(len(ss)),
-		p.phase(&po),
+		strconv.Itoa(cr) + "/" + strconv.Itoa(len(ss)),
 		strconv.Itoa(rc),
+		phase,
 		c.cpu,
 		c.mem,
 		perc.cpu,
 		perc.mem,
+		perc.cpuLim,
+		perc.memLim,
 		na(po.Status.PodIP),
 		na(po.Spec.NodeName),
 		p.mapQOS(po.Status.QOSClass),
+		mapToStr(po.Labels),
+		asStatus(p.diagnose(phase, cr, len(ss))),
 		toAge(po.ObjectMeta.CreationTimestamp),
-	)
+	}
+
+	return nil
+}
+
+func (p Pod) diagnose(phase string, cr, ct int) error {
+	if phase == Completed {
+		return nil
+	}
+	if cr != ct || ct == 0 {
+		return fmt.Errorf("container ready check failed: %d of %d", cr, ct)
+	}
 
 	return nil
 }
@@ -155,13 +155,16 @@ func (*Pod) gatherPodMX(pod *v1.Pod, mx *mv1beta1.PodMetrics) (c, p metric) {
 	cpu, mem := currentRes(mx)
 	c = metric{
 		cpu: ToMillicore(cpu.MilliValue()),
-		mem: ToMi(ToMB(mem.Value())),
+		mem: ToMi(client.ToMB(mem.Value())),
 	}
 
-	rc, rm := requestedRes(pod)
+	rc, rm := requestedRes(pod.Spec.Containers)
+	lc, lm := resourceLimits(pod.Spec.Containers)
 	p = metric{
-		cpu: AsPerc(toPerc(float64(cpu.MilliValue()), float64(rc.MilliValue()))),
-		mem: AsPerc(toPerc(ToMB(mem.Value()), ToMB(rm.Value()))),
+		cpu:    IntToStr(client.ToPercentage(cpu.MilliValue(), rc.MilliValue())),
+		mem:    IntToStr(client.ToPercentage(client.ToMB(mem.Value()), client.ToMB(rm.Value()))),
+		cpuLim: IntToStr(client.ToPercentage(cpu.MilliValue(), lc.MilliValue())),
+		memLim: IntToStr(client.ToPercentage(client.ToMB(mem.Value()), client.ToMB(lm.Value()))),
 	}
 
 	return
@@ -169,7 +172,6 @@ func (*Pod) gatherPodMX(pod *v1.Pod, mx *mv1beta1.PodMetrics) (c, p metric) {
 
 func containerResources(co v1.Container) (cpu, mem *resource.Quantity) {
 	req, limit := co.Resources.Requests, co.Resources.Limits
-
 	switch {
 	case len(req) != 0:
 		cpu, mem = req.Cpu(), req.Memory()
@@ -180,8 +182,32 @@ func containerResources(co v1.Container) (cpu, mem *resource.Quantity) {
 	return
 }
 
-func requestedRes(po *v1.Pod) (cpu, mem resource.Quantity) {
-	for _, co := range po.Spec.Containers {
+func containerLimits(co v1.Container) (cpu, mem *resource.Quantity) {
+	limit := co.Resources.Limits
+	if len(limit) == 0 {
+		return nil, nil
+	}
+	return limit.Cpu(), limit.Memory()
+}
+
+func resourceLimits(cc []v1.Container) (cpu, mem resource.Quantity) {
+	for _, co := range cc {
+		limit := co.Resources.Limits
+		if len(limit) == 0 {
+			continue
+		}
+		if limit.Cpu() != nil {
+			cpu.Add(*limit.Cpu())
+		}
+		if limit.Memory() != nil {
+			mem.Add(*limit.Memory())
+		}
+	}
+	return
+}
+
+func requestedRes(cc []v1.Container) (cpu, mem resource.Quantity) {
+	for _, co := range cc {
 		c, m := containerResources(co)
 		if c != nil {
 			cpu.Add(*c)
@@ -194,6 +220,9 @@ func requestedRes(po *v1.Pod) (cpu, mem resource.Quantity) {
 }
 
 func currentRes(mx *mv1beta1.PodMetrics) (cpu, mem resource.Quantity) {
+	if mx == nil {
+		return
+	}
 	for _, co := range mx.Containers {
 		c, m := co.Usage.Cpu(), co.Usage.Memory()
 		cpu.Add(*c)
@@ -213,7 +242,8 @@ func (*Pod) mapQOS(class v1.PodQOSClass) string {
 	}
 }
 
-func (*Pod) statuses(ss []v1.ContainerStatus) (cr, ct, rc int) {
+// Statuses reports current pod container statuses.
+func (*Pod) Statuses(ss []v1.ContainerStatus) (cr, ct, rc int) {
 	for _, c := range ss {
 		if c.State.Terminated != nil {
 			ct++
@@ -227,10 +257,11 @@ func (*Pod) statuses(ss []v1.ContainerStatus) (cr, ct, rc int) {
 	return
 }
 
-func (p *Pod) phase(po *v1.Pod) string {
+// Phase reports the given pod phase.
+func (p *Pod) Phase(po *v1.Pod) string {
 	status := string(po.Status.Phase)
 	if po.Status.Reason != "" {
-		if po.DeletionTimestamp != nil && po.Status.Reason == node.NodeUnreachablePodReason {
+		if po.DeletionTimestamp != nil && po.Status.Reason == "NodeLost" {
 			return "Unknown"
 		}
 		status = po.Status.Reason
@@ -242,14 +273,14 @@ func (p *Pod) phase(po *v1.Pod) string {
 	}
 
 	status, ok = p.containerPhase(po.Status, status)
-	if ok && status == "Completed" {
-		status = "Running"
+	if ok && status == Completed {
+		status = Running
 	}
 	if po.DeletionTimestamp == nil {
 		return status
 	}
 
-	return "Terminated"
+	return Terminating
 }
 
 func (*Pod) containerPhase(st v1.PodStatus, status string) (string, bool) {

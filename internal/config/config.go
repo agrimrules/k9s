@@ -49,12 +49,23 @@ type (
 		K9s      *K9s `yaml:"k9s"`
 		client   client.Connection
 		settings KubeSettings
+		demoMode bool
 	}
 )
 
 // NewConfig creates a new default config.
 func NewConfig(ks KubeSettings) *Config {
 	return &Config{K9s: NewK9s(), settings: ks}
+}
+
+// DemoMode returns true if demo mode is active, false otherwise.
+func (c *Config) DemoMode() bool {
+	return c.demoMode
+}
+
+// SetDemoMode sets the demo mode.
+func (c *Config) SetDemoMode(b bool) {
+	c.demoMode = b
 }
 
 // Refine the configuration based on cli args.
@@ -188,6 +199,9 @@ func (c *Config) Load(path string) error {
 	if cfg.K9s != nil {
 		c.K9s = cfg.K9s
 	}
+	if c.K9s.Logger == nil {
+		c.K9s.Logger = NewLogger()
+	}
 	return nil
 }
 
@@ -195,6 +209,7 @@ func (c *Config) Load(path string) error {
 func (c *Config) Save() error {
 	log.Debug().Msg("[Config] Saving configuration...")
 	c.Validate()
+
 	return c.SaveFile(K9sConfigFile)
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/derailed/k9s/internal/client"
 	"github.com/rs/zerolog/log"
@@ -13,7 +14,19 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-var resMetas = ResourceMetas{}
+// MetaAccess tracks resources metadata.
+var MetaAccess = NewMeta()
+
+// Meta represents available resource metas.
+type Meta struct {
+	resMetas ResourceMetas
+	mx       sync.RWMutex
+}
+
+// NewMeta returns a resource meta.
+func NewMeta() *Meta {
+	return &Meta{resMetas: make(ResourceMetas)}
+}
 
 // AccessorFor returns a client accessor for a resource if registered.
 // Otherwise it returns a generic accessor.
@@ -27,13 +40,19 @@ func AccessorFor(f Factory, gvr client.GVR) (Accessor, error) {
 		client.NewGVR("portforwards"):                  &PortForward{},
 		client.NewGVR("v1/services"):                   &Service{},
 		client.NewGVR("v1/pods"):                       &Pod{},
+		client.NewGVR("v1/nodes"):                      &Node{},
 		client.NewGVR("apps/v1/deployments"):           &Deployment{},
 		client.NewGVR("apps/v1/daemonsets"):            &DaemonSet{},
 		client.NewGVR("extensions/v1beta1/daemonsets"): &DaemonSet{},
 		client.NewGVR("apps/v1/statefulsets"):          &StatefulSet{},
 		client.NewGVR("batch/v1beta1/cronjobs"):        &CronJob{},
 		client.NewGVR("batch/v1/jobs"):                 &Job{},
-		client.NewGVR("charts"):                        &Chart{},
+		client.NewGVR("openfaas"):                      &OpenFaas{},
+		client.NewGVR("popeye"):                        &Popeye{},
+		client.NewGVR("sanitizer"):                     &Popeye{},
+
+		// BOZO!! v1.18.0
+		// client.NewGVR("charts"):                        &Chart{},
 	}
 
 	r, ok := m[gvr]
@@ -47,14 +66,20 @@ func AccessorFor(f Factory, gvr client.GVR) (Accessor, error) {
 }
 
 // RegisterMeta registers a new resource meta object.
-func RegisterMeta(gvr string, res metav1.APIResource) {
-	resMetas[client.NewGVR(gvr)] = res
+func (m *Meta) RegisterMeta(gvr string, res metav1.APIResource) {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+
+	m.resMetas[client.NewGVR(gvr)] = res
 }
 
 // AllGVRs returns all cluster resources.
-func AllGVRs() client.GVRs {
-	kk := make(client.GVRs, 0, len(resMetas))
-	for k := range resMetas {
+func (m *Meta) AllGVRs() client.GVRs {
+	m.mx.RLock()
+	defer m.mx.RUnlock()
+
+	kk := make(client.GVRs, 0, len(m.resMetas))
+	for k := range m.resMetas {
 		kk = append(kk, k)
 	}
 	sort.Sort(kk)
@@ -63,18 +88,21 @@ func AllGVRs() client.GVRs {
 }
 
 // MetaFor returns a resource metadata for a given gvr.
-func MetaFor(gvr client.GVR) (metav1.APIResource, error) {
-	m, ok := resMetas[gvr]
+func (m *Meta) MetaFor(gvr client.GVR) (metav1.APIResource, error) {
+	m.mx.RLock()
+	defer m.mx.RUnlock()
+
+	meta, ok := m.resMetas[gvr]
 	if !ok {
 		return metav1.APIResource{}, fmt.Errorf("no resource meta defined for %q", gvr)
 	}
-	return m, nil
+	return meta, nil
 }
 
 // IsK8sMeta checks for non resource meta.
 func IsK8sMeta(m metav1.APIResource) bool {
 	for _, c := range m.Categories {
-		if c == "k9s" || c == "helm" {
+		if c == "k9s" || c == "helm" || c == "faas" {
 			return false
 		}
 	}
@@ -94,13 +122,16 @@ func IsK9sMeta(m metav1.APIResource) bool {
 }
 
 // LoadResources hydrates server preferred+CRDs resource metadata.
-func LoadResources(f Factory) error {
-	resMetas = make(ResourceMetas, 100)
-	if err := loadPreferred(f, resMetas); err != nil {
+func (m *Meta) LoadResources(f Factory) error {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+
+	m.resMetas = make(ResourceMetas, 100)
+	if err := loadPreferred(f, m.resMetas); err != nil {
 		return err
 	}
-	loadNonResource(resMetas)
-	loadCRDs(f, resMetas)
+	loadNonResource(m.resMetas)
+	loadCRDs(f, m.resMetas)
 
 	return nil
 }
@@ -110,9 +141,19 @@ func loadNonResource(m ResourceMetas) {
 	loadK9s(m)
 	loadRBAC(m)
 	loadHelm(m)
+	if IsOpenFaasEnabled() {
+		loadOpenFaas(m)
+	}
 }
 
 func loadK9s(m ResourceMetas) {
+	m[client.NewGVR("pulses")] = metav1.APIResource{
+		Name:         "pulses",
+		Kind:         "Pulse",
+		SingularName: "pulses",
+		ShortNames:   []string{"hz", "pu"},
+		Categories:   []string{"k9s"},
+	}
 	m[client.NewGVR("xrays")] = metav1.APIResource{
 		Name:         "xray",
 		Kind:         "XRays",
@@ -123,6 +164,21 @@ func loadK9s(m ResourceMetas) {
 		Name:         "aliases",
 		Kind:         "Aliases",
 		SingularName: "alias",
+		Verbs:        []string{},
+		Categories:   []string{"k9s"},
+	}
+	m[client.NewGVR("popeye")] = metav1.APIResource{
+		Name:         "popeye",
+		Kind:         "Popeye",
+		SingularName: "popeye",
+		Verbs:        []string{},
+		Categories:   []string{"k9s"},
+	}
+	m[client.NewGVR("sanitizer")] = metav1.APIResource{
+		Name:         "sanitizer",
+		Kind:         "Sanitizer",
+		SingularName: "sanitizer",
+		Verbs:        []string{},
 		Categories:   []string{"k9s"},
 	}
 	m[client.NewGVR("contexts")] = metav1.APIResource{
@@ -130,6 +186,7 @@ func loadK9s(m ResourceMetas) {
 		Kind:         "Contexts",
 		SingularName: "context",
 		ShortNames:   []string{"ctx"},
+		Verbs:        []string{},
 		Categories:   []string{"k9s"},
 	}
 	m[client.NewGVR("screendumps")] = metav1.APIResource{
@@ -161,6 +218,7 @@ func loadK9s(m ResourceMetas) {
 		Name:         "containers",
 		Kind:         "Containers",
 		SingularName: "container",
+		Verbs:        []string{},
 		Categories:   []string{"k9s"},
 	}
 }
@@ -172,6 +230,17 @@ func loadHelm(m ResourceMetas) {
 		Namespaced: true,
 		Verbs:      []string{"delete"},
 		Categories: []string{"helm"},
+	}
+}
+
+func loadOpenFaas(m ResourceMetas) {
+	m[client.NewGVR("openfaas")] = metav1.APIResource{
+		Name:       "openfaas",
+		Kind:       "OpenFaaS",
+		ShortNames: []string{"ofaas", "ofa"},
+		Namespaced: true,
+		Verbs:      []string{"delete"},
+		Categories: []string{"faas"},
 	}
 }
 
@@ -202,7 +271,7 @@ func loadRBAC(m ResourceMetas) {
 func loadPreferred(f Factory, m ResourceMetas) error {
 	rr, err := f.Client().CachedDiscoveryOrDie().ServerPreferredResources()
 	if err != nil {
-		log.Warn().Err(err).Msgf("Failed to load preferred resources")
+		log.Debug().Err(err).Msgf("Failed to load preferred resources")
 	}
 	for _, r := range rr {
 		for _, res := range r.APIResources {

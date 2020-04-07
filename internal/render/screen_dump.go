@@ -16,7 +16,7 @@ type ScreenDump struct{}
 
 // ColorerFunc colors a resource row.
 func (ScreenDump) ColorerFunc() ColorerFunc {
-	return func(ns string, re RowEvent) tcell.Color {
+	return func(ns string, _ Header, re RowEvent) tcell.Color {
 		return tcell.ColorNavajoWhite
 	}
 }
@@ -30,10 +30,12 @@ var AgeDecorator = func(a string) string {
 }
 
 // Header returns a header row.
-func (ScreenDump) Header(ns string) HeaderRow {
-	return HeaderRow{
-		Header{Name: "NAME"},
-		Header{Name: "AGE", Decorator: AgeDecorator},
+func (ScreenDump) Header(ns string) Header {
+	return Header{
+		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "DIR"},
+		HeaderColumn{Name: "VALID", Wide: true},
+		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
 	}
 }
 
@@ -47,6 +49,8 @@ func (b ScreenDump) Render(o interface{}, ns string, r *Row) error {
 	r.ID = filepath.Join(f.Dir, f.File.Name())
 	r.Fields = Fields{
 		f.File.Name(),
+		f.Dir,
+		"",
 		timeToAge(f.File.ModTime()),
 	}
 

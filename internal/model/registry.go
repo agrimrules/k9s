@@ -10,9 +10,17 @@ import (
 // BOZO!! Break up deps and merge into single registrar
 var Registry = map[string]ResourceMeta{
 	// Custom...
-	"charts": {
-		DAO:      &dao.Chart{},
-		Renderer: &render.Chart{},
+	// BOZO!! v1.18.0
+	// "charts": {
+	// 	DAO:      &dao.Chart{},
+	// 	Renderer: &render.Chart{},
+	// },
+	"pulses": {
+		DAO: &dao.Pulse{},
+	},
+	"openfaas": {
+		DAO:      &dao.OpenFaas{},
+		Renderer: &render.OpenFaas{},
 	},
 	"containers": {
 		DAO:          &dao.Container{},
@@ -54,6 +62,14 @@ var Registry = map[string]ResourceMeta{
 	"aliases": {
 		DAO:      &dao.Alias{},
 		Renderer: &render.Alias{},
+	},
+	"popeye": {
+		DAO:      &dao.Popeye{},
+		Renderer: &render.Popeye{},
+	},
+	"sanitizer": {
+		DAO:          &dao.Popeye{},
+		TreeRenderer: &xray.Section{},
 	},
 
 	// Core...

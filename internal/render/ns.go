@@ -1,6 +1,7 @@
 package render
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -15,22 +16,19 @@ import (
 type Namespace struct{}
 
 // ColorerFunc colors a resource row.
-func (Namespace) ColorerFunc() ColorerFunc {
-	return func(ns string, r RowEvent) tcell.Color {
-		c := DefaultColorer(ns, r)
-		if r.Kind == EventAdd {
-			return c
-		}
+func (n Namespace) ColorerFunc() ColorerFunc {
+	return func(ns string, h Header, re RowEvent) tcell.Color {
+		c := DefaultColorer(ns, h, re)
 
-		if r.Kind == EventUpdate {
+		if re.Kind == EventUpdate {
 			c = StdColor
 		}
-		switch strings.TrimSpace(r.Row.Fields[1]) {
-		case "Inactive", Terminating:
-			c = ErrColor
-		}
-		if strings.Contains(strings.TrimSpace(r.Row.Fields[0]), "*") {
+		if strings.Contains(strings.TrimSpace(re.Row.Fields[0]), "*") {
 			c = HighlightColor
+		}
+
+		if !Happy(ns, h, re.Row) {
+			c = ErrColor
 		}
 
 		return c
@@ -38,16 +36,18 @@ func (Namespace) ColorerFunc() ColorerFunc {
 }
 
 // Header returns a header rbw.
-func (Namespace) Header(string) HeaderRow {
-	return HeaderRow{
-		Header{Name: "NAME"},
-		Header{Name: "STATUS"},
-		Header{Name: "AGE", Decorator: AgeDecorator},
+func (Namespace) Header(string) Header {
+	return Header{
+		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "STATUS"},
+		HeaderColumn{Name: "LABELS", Wide: true},
+		HeaderColumn{Name: "VALID", Wide: true},
+		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
 	}
 }
 
 // Render renders a K8s resource to screen.
-func (Namespace) Render(o interface{}, _ string, r *Row) error {
+func (n Namespace) Render(o interface{}, _ string, r *Row) error {
 	raw, ok := o.(*unstructured.Unstructured)
 	if !ok {
 		return fmt.Errorf("Expected Namespace, but got %T", o)
@@ -62,8 +62,17 @@ func (Namespace) Render(o interface{}, _ string, r *Row) error {
 	r.Fields = Fields{
 		ns.Name,
 		string(ns.Status.Phase),
+		mapToStr(ns.Labels),
+		asStatus(n.diagnose(ns.Status.Phase)),
 		toAge(ns.ObjectMeta.CreationTimestamp),
 	}
 
+	return nil
+}
+
+func (Namespace) diagnose(phase v1.NamespacePhase) error {
+	if phase != v1.NamespaceActive && phase != v1.NamespaceTerminating {
+		return errors.New("namespace not ready")
+	}
 	return nil
 }

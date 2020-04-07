@@ -3,11 +3,9 @@ package render
 import (
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
 	v1beta1 "k8s.io/api/policy/v1beta1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -18,43 +16,25 @@ import (
 type PodDisruptionBudget struct{}
 
 // ColorerFunc colors a resource row.
-func (PodDisruptionBudget) ColorerFunc() ColorerFunc {
-	return func(ns string, r RowEvent) tcell.Color {
-		c := DefaultColorer(ns, r)
-		if r.Kind == EventAdd || r.Kind == EventUpdate {
-			return c
-		}
-
-		markCol := 5
-		if !client.IsAllNamespaces(ns) {
-			markCol--
-		}
-		if strings.TrimSpace(r.Row.Fields[markCol]) != strings.TrimSpace(r.Row.Fields[markCol+1]) {
-			return ErrColor
-		}
-
-		return StdColor
-	}
-
+func (p PodDisruptionBudget) ColorerFunc() ColorerFunc {
+	return DefaultColorer
 }
 
 // Header returns a header row.
-func (PodDisruptionBudget) Header(ns string) HeaderRow {
-	var h HeaderRow
-	if client.IsAllNamespaces(ns) {
-		h = append(h, Header{Name: "NAMESPACE"})
+func (PodDisruptionBudget) Header(ns string) Header {
+	return Header{
+		HeaderColumn{Name: "NAMESPACE"},
+		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "MIN AVAILABLE", Align: tview.AlignRight},
+		HeaderColumn{Name: "MAX_ UNAVAILABLE", Align: tview.AlignRight},
+		HeaderColumn{Name: "ALLOWED DISRUPTIONS", Align: tview.AlignRight},
+		HeaderColumn{Name: "CURRENT", Align: tview.AlignRight},
+		HeaderColumn{Name: "DESIRED", Align: tview.AlignRight},
+		HeaderColumn{Name: "EXPECTED", Align: tview.AlignRight},
+		HeaderColumn{Name: "LABELS", Wide: true},
+		HeaderColumn{Name: "VALID", Wide: true},
+		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
 	}
-
-	return append(h,
-		Header{Name: "NAME"},
-		Header{Name: "MIN AVAILABLE", Align: tview.AlignRight},
-		Header{Name: "MAX_ UNAVAILABLE", Align: tview.AlignRight},
-		Header{Name: "ALLOWED DISRUPTIONS", Align: tview.AlignRight},
-		Header{Name: "CURRENT", Align: tview.AlignRight},
-		Header{Name: "DESIRED", Align: tview.AlignRight},
-		Header{Name: "EXPECTED", Align: tview.AlignRight},
-		Header{Name: "AGE", Decorator: AgeDecorator},
-	)
 }
 
 // Render renders a K8s resource to screen.
@@ -70,21 +50,30 @@ func (p PodDisruptionBudget) Render(o interface{}, ns string, r *Row) error {
 	}
 
 	r.ID = client.MetaFQN(pdb.ObjectMeta)
-	r.Fields = make(Fields, 0, len(p.Header(ns)))
-	if client.IsAllNamespaces(ns) {
-		r.Fields = append(r.Fields, pdb.Namespace)
-	}
-	r.Fields = append(r.Fields,
+	r.Fields = Fields{
+		pdb.Namespace,
 		pdb.Name,
 		numbToStr(pdb.Spec.MinAvailable),
 		numbToStr(pdb.Spec.MaxUnavailable),
-		strconv.Itoa(int(pdb.Status.PodDisruptionsAllowed)),
+		strconv.Itoa(int(pdb.Status.DisruptionsAllowed)),
 		strconv.Itoa(int(pdb.Status.CurrentHealthy)),
 		strconv.Itoa(int(pdb.Status.DesiredHealthy)),
 		strconv.Itoa(int(pdb.Status.ExpectedPods)),
+		mapToStr(pdb.Labels),
+		asStatus(p.diagnose(pdb.Spec.MinAvailable, pdb.Status.CurrentHealthy)),
 		toAge(pdb.ObjectMeta.CreationTimestamp),
-	)
+	}
 
+	return nil
+}
+
+func (PodDisruptionBudget) diagnose(min *intstr.IntOrString, healthy int32) error {
+	if min == nil {
+		return nil
+	}
+	if min.IntVal > healthy {
+		return fmt.Errorf("expected %d but got %d", min.IntVal, healthy)
+	}
 	return nil
 }
 

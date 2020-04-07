@@ -51,6 +51,9 @@ func miscViewers(vv MetaViewers) {
 	vv[client.NewGVR("contexts")] = MetaViewer{
 		viewerFn: NewContext,
 	}
+	vv[client.NewGVR("openfaas")] = MetaViewer{
+		viewerFn: NewOpenFaas,
+	}
 	vv[client.NewGVR("containers")] = MetaViewer{
 		viewerFn: NewContainer,
 	}
@@ -66,6 +69,16 @@ func miscViewers(vv MetaViewers) {
 	vv[client.NewGVR("aliases")] = MetaViewer{
 		viewerFn: NewAlias,
 	}
+	vv[client.NewGVR("pulses")] = MetaViewer{
+		viewerFn: NewPulse,
+	}
+	vv[client.NewGVR("popeye")] = MetaViewer{
+		viewerFn: NewPopeye,
+	}
+	vv[client.NewGVR("sanitizer")] = MetaViewer{
+		viewerFn: NewSanitizer,
+	}
+
 }
 
 func appsViewers(vv MetaViewers) {
@@ -131,7 +144,7 @@ func extViewers(vv MetaViewers) {
 func showCRD(app *App, _ ui.Tabular, _, path string) {
 	_, crdGVR := client.Namespaced(path)
 	tokens := strings.Split(crdGVR, ".")
-	if err := app.gotoResource(tokens[0], false); err != nil {
+	if err := app.gotoResource(tokens[0], "", false); err != nil {
 		app.Flash().Err(err)
 	}
 }

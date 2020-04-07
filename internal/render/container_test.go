@@ -38,7 +38,10 @@ func TestContainer(t *testing.T) {
 		"20",
 		"50",
 		"20",
+		"50",
+		"20",
 		"",
+		"container is not ready",
 	},
 		r.Fields[:len(r.Fields)-1],
 	)

@@ -16,6 +16,7 @@ type LogIndicator struct {
 	scrollStatus int32
 	fullScreen   bool
 	textWrap     bool
+	showTime     bool
 }
 
 // NewLogIndicator returns a new indicator.
@@ -24,18 +25,30 @@ func NewLogIndicator(cfg *config.Config, styles *config.Styles) *LogIndicator {
 		styles:       styles,
 		TextView:     tview.NewTextView(),
 		scrollStatus: 1,
-		fullScreen:   cfg.K9s.FullScreenLogs,
+		fullScreen:   cfg.K9s.Logger.FullScreenLogs,
 	}
-	l.SetBackgroundColor(config.AsColor(styles.Views().Log.BgColor))
-	l.SetTextAlign(tview.AlignRight)
+	l.StylesChanged(styles)
+	styles.AddListener(&l)
+	l.SetTextAlign(tview.AlignCenter)
 	l.SetDynamicColors(true)
 
 	return &l
 }
 
+// StylesChanged notifies listener the skin changed.
+func (l *LogIndicator) StylesChanged(styles *config.Styles) {
+	l.SetBackgroundColor(styles.K9s.Views.Log.Indicator.BgColor.Color())
+	l.SetTextColor(styles.K9s.Views.Log.Indicator.FgColor.Color())
+}
+
 // AutoScroll reports the current scrolling status.
 func (l *LogIndicator) AutoScroll() bool {
 	return atomic.LoadInt32(&l.scrollStatus) == 1
+}
+
+// Timestamp reports the current timestamp mode.
+func (l *LogIndicator) Timestamp() bool {
+	return l.showTime
 }
 
 // TextWrap reports the current wrap mode.
@@ -46,6 +59,11 @@ func (l *LogIndicator) TextWrap() bool {
 // FullScreen reports the current screen mode.
 func (l *LogIndicator) FullScreen() bool {
 	return l.fullScreen
+}
+
+// ToggleTimestamp toggles the current timestamp mode.
+func (l *LogIndicator) ToggleTimestamp() {
+	l.showTime = !l.showTime
 }
 
 // ToggleFullScreen toggles the screen mode.
@@ -75,6 +93,7 @@ func (l *LogIndicator) Refresh() {
 	l.Clear()
 	l.update("Autoscroll: " + l.onOff(l.AutoScroll()))
 	l.update("FullScreen: " + l.onOff(l.fullScreen))
+	l.update("Timestamps: " + l.onOff(l.showTime))
 	l.update("Wrap: " + l.onOff(l.textWrap))
 }
 
@@ -86,6 +105,5 @@ func (l *LogIndicator) onOff(b bool) string {
 }
 
 func (l *LogIndicator) update(status string) {
-	fg, bg := l.styles.Frame().Crumb.FgColor, l.styles.Frame().Crumb.ActiveColor
-	fmt.Fprintf(l, "[%s:%s:b] %-15s ", fg, bg, status)
+	fmt.Fprintf(l, "[::b]%-20s", status)
 }

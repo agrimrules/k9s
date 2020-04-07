@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -28,17 +29,18 @@ type TableListener interface {
 
 // Table represents a table model.
 type Table struct {
-	gvr         string
+	gvr         client.GVR
 	namespace   string
 	data        *render.TableData
 	listeners   []TableListener
 	inUpdate    int32
 	refreshRate time.Duration
 	instance    string
+	mx          sync.RWMutex
 }
 
 // NewTable returns a new table model.
-func NewTable(gvr string) *Table {
+func NewTable(gvr client.GVR) *Table {
 	return &Table{
 		gvr:         gvr,
 		data:        render.NewTableData(),
@@ -73,8 +75,13 @@ func (t *Table) RemoveListener(l TableListener) {
 
 // Watch initiates model updates.
 func (t *Table) Watch(ctx context.Context) {
-	t.Refresh(ctx)
+	t.refresh(ctx)
 	go t.updater(ctx)
+}
+
+// Refresh updates the table content.
+func (t *Table) Refresh(ctx context.Context) {
+	t.refresh(ctx)
 }
 
 // Get returns a resource instance if found, else an error.
@@ -132,11 +139,6 @@ func (t *Table) ToYAML(ctx context.Context, path string) (string, error) {
 	return desc.ToYAML(path)
 }
 
-// Refresh update the model now.
-func (t *Table) Refresh(ctx context.Context) {
-	t.refresh(ctx)
-}
-
 // GetNamespace returns the model namespace.
 func (t *Table) GetNamespace() string {
 	return t.namespace
@@ -146,6 +148,11 @@ func (t *Table) GetNamespace() string {
 func (t *Table) SetNamespace(ns string) {
 	t.namespace = ns
 	t.data.Clear()
+}
+
+// InNamespace checks if current namespace matches desired namespace.
+func (t *Table) InNamespace(ns string) bool {
+	return len(t.data.RowEvents) > 0 && t.namespace == ns
 }
 
 // SetRefreshRate sets model refresh duration.
@@ -158,11 +165,6 @@ func (t *Table) ClusterWide() bool {
 	return client.IsClusterWide(t.namespace)
 }
 
-// InNamespace checks if current namespace matches desired namespace.
-func (t *Table) InNamespace(ns string) bool {
-	return t.namespace == ns
-}
-
 // Empty return true if no model data.
 func (t *Table) Empty() bool {
 	return len(t.data.RowEvents) == 0
@@ -170,11 +172,14 @@ func (t *Table) Empty() bool {
 
 // Peek returns model data.
 func (t *Table) Peek() render.TableData {
-	return *t.data
+	t.mx.RLock()
+	defer t.mx.RUnlock()
+
+	return t.data.Clone()
 }
 
 func (t *Table) updater(ctx context.Context) {
-	defer log.Debug().Msgf("Model canceled -- %q", t.gvr)
+	defer log.Debug().Msgf("TABLE-MODEL canceled -- %q", t.gvr)
 
 	rate := initRefreshRate
 	for {
@@ -200,7 +205,7 @@ func (t *Table) refresh(ctx context.Context) {
 		t.fireTableLoadFailed(err)
 		return
 	}
-	t.fireTableChanged(*t.data)
+	t.fireTableChanged(t.Peek())
 }
 
 func (t *Table) list(ctx context.Context, a dao.Accessor) ([]runtime.Object, error) {
@@ -208,9 +213,14 @@ func (t *Table) list(ctx context.Context, a dao.Accessor) ([]runtime.Object, err
 	if !ok {
 		return nil, fmt.Errorf("expected Factory in context but got %T", ctx.Value(internal.KeyFactory))
 	}
-	a.Init(factory, client.NewGVR(t.gvr))
+	a.Init(factory, t.gvr)
 
-	return a.List(ctx, client.CleanseNamespace(t.namespace))
+	ns := client.CleanseNamespace(t.namespace)
+	if client.IsClusterScoped(t.namespace) {
+		ns = client.AllNamespaces
+	}
+
+	return a.List(ctx, ns)
 }
 
 func (t *Table) reconcile(ctx context.Context) error {
@@ -226,36 +236,42 @@ func (t *Table) reconcile(ctx context.Context) error {
 		oo, err = []runtime.Object{o}, e
 	}
 	if err != nil {
+		log.Error().Err(err).Msg("Reconcile failed to list resource")
 		return err
 	}
 
 	var rows render.Rows
-	ns := client.CleanseNamespace(t.namespace)
-	if _, ok := meta.Renderer.(*render.Generic); ok {
-		table, ok := oo[0].(*metav1beta1.Table)
-		if !ok {
-			return fmt.Errorf("expecting a meta table but got %T", oo[0])
-		}
-		rows = make(render.Rows, len(table.Rows))
-		if err := genericHydrate(ns, table, rows, meta.Renderer); err != nil {
-			return err
-		}
-	} else {
-		rows = make(render.Rows, len(oo))
-		if err := hydrate(ns, oo, rows, meta.Renderer); err != nil {
-			return err
+	if len(oo) > 0 {
+		if _, ok := meta.Renderer.(*render.Generic); ok {
+			table, ok := oo[0].(*metav1beta1.Table)
+			if !ok {
+				return fmt.Errorf("expecting a meta table but got %T", oo[0])
+			}
+			rows = make(render.Rows, len(table.Rows))
+			if err := genericHydrate(t.namespace, table, rows, meta.Renderer); err != nil {
+				return err
+			}
+		} else {
+			rows = make(render.Rows, len(oo))
+			if err := hydrate(t.namespace, oo, rows, meta.Renderer); err != nil {
+				return err
+			}
 		}
 	}
 
-	t.data.Mutex.Lock()
-	defer t.data.Mutex.Unlock()
+	t.mx.Lock()
+	defer t.mx.Unlock()
 	// if labelSelector in place might as well clear the model data.
 	sel, ok := ctx.Value(internal.KeyLabels).(string)
 	if ok && sel != "" {
 		t.data.Clear()
 	}
 	t.data.Update(rows)
-	t.data.Namespace, t.data.Header = t.namespace, meta.Renderer.Header(t.namespace)
+	t.data.SetHeader(t.namespace, meta.Renderer.Header(t.namespace))
+
+	if len(t.data.Header) == 0 {
+		return fmt.Errorf("fail to list resource %s", t.gvr)
+	}
 
 	return nil
 }
@@ -266,15 +282,14 @@ func (t *Table) getMeta(ctx context.Context) (ResourceMeta, error) {
 	if !ok {
 		return ResourceMeta{}, fmt.Errorf("expected Factory in context but got %T", ctx.Value(internal.KeyFactory))
 	}
-	meta.DAO.Init(factory, client.NewGVR(t.gvr))
+	meta.DAO.Init(factory, t.gvr)
 
 	return meta, nil
 }
 
 func (t *Table) resourceMeta() ResourceMeta {
-	meta, ok := Registry[t.gvr]
+	meta, ok := Registry[t.gvr.String()]
 	if !ok {
-		log.Debug().Msgf("Resource %s not found in registry. Going generic!", t.gvr)
 		meta = ResourceMeta{
 			DAO:      &dao.Table{},
 			Renderer: &render.Generic{},

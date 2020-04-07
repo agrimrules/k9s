@@ -20,20 +20,68 @@ type synchronizer interface {
 
 // Configurator represents an application configurationa.
 type Configurator struct {
-	skinFile string
-	Config   *config.Config
-	Styles   *config.Styles
-	Bench    *config.Bench
+	Config     *config.Config
+	Styles     *config.Styles
+	CustomView *config.CustomView
+	BenchFile  string
+	skinFile   string
 }
 
-// HasSkins returns true if a skin file was located.
-func (c *Configurator) HasSkins() bool {
+// HasSkin returns true if a skin file was located.
+func (c *Configurator) HasSkin() bool {
 	return c.skinFile != ""
 }
 
-// StylesUpdater watches for skin file changes.
-func (c *Configurator) StylesUpdater(ctx context.Context, s synchronizer) error {
-	if !c.HasSkins() {
+// CustomViewsWatcher watches for view config file changes.
+func (c *Configurator) CustomViewsWatcher(ctx context.Context, s synchronizer) error {
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		for {
+			select {
+			case evt := <-w.Events:
+				_ = evt
+				s.QueueUpdateDraw(func() {
+					c.RefreshCustomViews()
+				})
+			case err := <-w.Errors:
+				log.Info().Err(err).Msg("CustomView watcher failed")
+				return
+			case <-ctx.Done():
+				log.Debug().Msgf("CustomViewWatcher Done `%s!!", config.K9sViewConfigFile)
+				if err := w.Close(); err != nil {
+					log.Error().Err(err).Msg("Closing CustomView watcher")
+				}
+				return
+			}
+		}
+	}()
+
+	log.Debug().Msgf("CustomView watching `%s", config.K9sViewConfigFile)
+	c.RefreshCustomViews()
+	return w.Add(config.K9sViewConfigFile)
+}
+
+// RefreshCustomViews load view configuration changes.
+func (c *Configurator) RefreshCustomViews() {
+	if c.CustomView == nil {
+		c.CustomView = config.NewCustomView()
+	} else {
+		c.CustomView.Reset()
+	}
+
+	if err := c.CustomView.Load(config.K9sViewConfigFile); err != nil {
+		log.Error().Err(err).Msgf("Custom view load failed %s", config.K9sViewConfigFile)
+		return
+	}
+}
+
+// StylesWatcher watches for skin file changes.
+func (c *Configurator) StylesWatcher(ctx context.Context, s synchronizer) error {
+	if !c.HasSkin() {
 		return nil
 	}
 
@@ -56,7 +104,7 @@ func (c *Configurator) StylesUpdater(ctx context.Context, s synchronizer) error 
 			case <-ctx.Done():
 				log.Debug().Msgf("SkinWatcher Done `%s!!", c.skinFile)
 				if err := w.Close(); err != nil {
-					log.Error().Err(err).Msg("Closing watcher")
+					log.Error().Err(err).Msg("Closing Skin watcher")
 				}
 				return
 			}
@@ -67,29 +115,24 @@ func (c *Configurator) StylesUpdater(ctx context.Context, s synchronizer) error 
 	return w.Add(c.skinFile)
 }
 
-// InitBench load benchmark configuration if any.
-func (c *Configurator) InitBench(cluster string) {
-	var err error
-	if c.Bench, err = config.NewBench(BenchConfig(cluster)); err != nil {
-		log.Info().Msg("No benchmark config file found, using defaults.")
-	}
-}
-
 // BenchConfig location of the benchmarks configuration file.
-func BenchConfig(cluster string) string {
-	return filepath.Join(config.K9sHome, config.K9sBench+"-"+cluster+".yml")
+func BenchConfig(context string) string {
+	return filepath.Join(config.K9sHome, config.K9sBench+"-"+context+".yml")
 }
 
 // RefreshStyles load for skin configuration changes.
-func (c *Configurator) RefreshStyles(cluster string) {
-	clusterSkins := filepath.Join(config.K9sHome, fmt.Sprintf("%s_skin.yml", cluster))
+func (c *Configurator) RefreshStyles(context string) {
+	c.BenchFile = BenchConfig(context)
+
+	clusterSkins := filepath.Join(config.K9sHome, fmt.Sprintf("%s_skin.yml", context))
 	if c.Styles == nil {
 		c.Styles = config.NewStyles()
+	} else {
+		c.Styles.Reset()
 	}
 	if err := c.Styles.Load(clusterSkins); err != nil {
-		log.Info().Msgf("No cluster specific skin file found -- %s", clusterSkins)
+		log.Info().Msgf("No context specific skin file found -- %s", clusterSkins)
 	} else {
-		log.Debug().Msgf("Found cluster skins %s", clusterSkins)
 		c.updateStyles(clusterSkins)
 		return
 	}
@@ -104,12 +147,16 @@ func (c *Configurator) RefreshStyles(cluster string) {
 
 func (c *Configurator) updateStyles(f string) {
 	c.skinFile = f
+	if !c.HasSkin() {
+		c.Styles.DefaultSkin()
+	}
 	c.Styles.Update()
 
-	render.StdColor = config.AsColor(c.Styles.Frame().Status.NewColor)
-	render.AddColor = config.AsColor(c.Styles.Frame().Status.AddColor)
-	render.ModColor = config.AsColor(c.Styles.Frame().Status.ModifyColor)
-	render.ErrColor = config.AsColor(c.Styles.Frame().Status.ErrorColor)
-	render.HighlightColor = config.AsColor(c.Styles.Frame().Status.HighlightColor)
-	render.CompletedColor = config.AsColor(c.Styles.Frame().Status.CompletedColor)
+	render.ModColor = c.Styles.Frame().Status.ModifyColor.Color()
+	render.AddColor = c.Styles.Frame().Status.AddColor.Color()
+	render.ErrColor = c.Styles.Frame().Status.ErrorColor.Color()
+	render.StdColor = c.Styles.Frame().Status.NewColor.Color()
+	render.HighlightColor = c.Styles.Frame().Status.HighlightColor.Color()
+	render.KillColor = c.Styles.Frame().Status.KillColor.Color()
+	render.CompletedColor = c.Styles.Frame().Status.CompletedColor.Color()
 }

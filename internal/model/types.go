@@ -26,6 +26,9 @@ type Igniter interface {
 type Hinter interface {
 	// Hints returns a collection of menu hints.
 	Hints() MenuHints
+
+	// ExtraHints returns additional hints.
+	ExtraHints() map[string]string
 }
 
 // Primitive represents a UI primitive.
@@ -49,7 +52,7 @@ type Renderer interface {
 	Render(o interface{}, ns string, row *render.Row) error
 
 	// Header returns the resource header.
-	Header(ns string) render.HeaderRow
+	Header(ns string) render.Header
 
 	// ColorerFunc returns a row colorer function.
 	ColorerFunc() render.ColorerFunc

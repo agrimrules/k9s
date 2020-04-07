@@ -6,13 +6,11 @@ import (
 	"strings"
 
 	"github.com/derailed/k9s/internal/client"
-	"github.com/derailed/k9s/internal/dao"
 	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
-	"github.com/derailed/k9s/internal/ui/dialog"
 	"github.com/gdamore/tcell"
 	"github.com/rs/zerolog/log"
-	"k8s.io/client-go/tools/portforward"
+	v1 "k8s.io/api/core/v1"
 )
 
 const containerTitle = "Containers"
@@ -37,23 +35,40 @@ func NewContainer(gvr client.GVR) ResourceViewer {
 // Name returns the component name.
 func (c *Container) Name() string { return containerTitle }
 
-func (c *Container) bindKeys(aa ui.KeyActions) {
-	aa.Delete(tcell.KeyCtrlSpace, ui.KeySpace)
+func (c *Container) bindDangerousKeys(aa ui.KeyActions) {
 	aa.Add(ui.KeyActions{
-		ui.KeyShiftF: ui.NewKeyAction("PortForward", c.portFwdCmd, true),
-		ui.KeyS:      ui.NewKeyAction("Shell", c.shellCmd, true),
-		ui.KeyShiftC: ui.NewKeyAction("Sort CPU", c.GetTable().SortColCmd(6, false), false),
-		ui.KeyShiftM: ui.NewKeyAction("Sort MEM", c.GetTable().SortColCmd(7, false), false),
-		ui.KeyShiftX: ui.NewKeyAction("Sort CPU%", c.GetTable().SortColCmd(8, false), false),
-		ui.KeyShiftZ: ui.NewKeyAction("Sort MEM%", c.GetTable().SortColCmd(9, false), false),
+		ui.KeyS: ui.NewKeyAction("Shell", c.shellCmd, true),
+		ui.KeyA: ui.NewKeyAction("Attach", c.attachCmd, true),
 	})
 }
 
-func (c *Container) k9sEnv() K9sEnv {
-	env := defaultK9sEnv(c.App(), c.GetTable().GetSelectedItem(), c.GetTable().GetSelectedRow())
-	ns, n := client.Namespaced(c.GetTable().Path)
-	env["POD"] = n
-	env["NAMESPACE"] = ns
+func (c *Container) bindKeys(aa ui.KeyActions) {
+	aa.Delete(tcell.KeyCtrlSpace, ui.KeySpace)
+
+	if !c.App().Config.K9s.GetReadOnly() {
+		c.bindDangerousKeys(aa)
+	}
+
+	aa.Add(ui.KeyActions{
+		ui.KeyShiftF:   ui.NewKeyAction("PortForward", c.portFwdCmd, true),
+		ui.KeyShiftT:   ui.NewKeyAction("Sort Restart", c.GetTable().SortColCmd("RESTARTS", false), false),
+		ui.KeyShiftC:   ui.NewKeyAction("Sort CPU", c.GetTable().SortColCmd(cpuCol, false), false),
+		ui.KeyShiftM:   ui.NewKeyAction("Sort MEM", c.GetTable().SortColCmd(memCol, false), false),
+		ui.KeyShiftX:   ui.NewKeyAction("Sort %CPU (REQ)", c.GetTable().SortColCmd("%CPU/R", false), false),
+		ui.KeyShiftZ:   ui.NewKeyAction("Sort %MEM (REQ)", c.GetTable().SortColCmd("%MEM/R", false), false),
+		tcell.KeyCtrlX: ui.NewKeyAction("Sort %CPU (LIM)", c.GetTable().SortColCmd("%CPU/L", false), false),
+		tcell.KeyCtrlQ: ui.NewKeyAction("Sort %MEM (LIM)", c.GetTable().SortColCmd("%MEM/L", false), false),
+	})
+}
+
+func (c *Container) k9sEnv() Env {
+	path := c.GetTable().GetSelectedItem()
+	row, ok := c.GetTable().GetSelectedRow(path)
+	if !ok {
+		log.Error().Msgf("unable to locate seleted row for %q", path)
+	}
+	env := defaultEnv(c.App().Conn().Config(), path, c.GetTable().GetModel().Peek().Header, row)
+	env["NAMESPACE"], env["POD"] = client.Namespaced(c.GetTable().Path)
 
 	return env
 }
@@ -64,11 +79,6 @@ func (c *Container) selectedContainer() string {
 }
 
 func (c *Container) viewLogs(app *App, model ui.Tabular, gvr, path string) {
-	status := c.GetTable().GetSelectedCell(3)
-	if status != "Running" && status != "Completed" {
-		app.Flash().Err(errors.New("No logs available"))
-		return
-	}
 	c.ResourceViewer.(*LogsExtender).showLogs(c.GetTable().Path, false)
 }
 
@@ -83,6 +93,19 @@ func (c *Container) shellCmd(evt *tcell.EventKey) *tcell.EventKey {
 	c.Stop()
 	defer c.Start()
 	shellIn(c.App(), c.GetTable().Path, sel)
+
+	return nil
+}
+
+func (c *Container) attachCmd(evt *tcell.EventKey) *tcell.EventKey {
+	sel := c.GetTable().GetSelectedItem()
+	if sel == "" {
+		return evt
+	}
+
+	c.Stop()
+	defer c.Start()
+	attachIn(c.App(), c.GetTable().Path, sel)
 
 	return nil
 }
@@ -102,78 +125,60 @@ func (c *Container) portFwdCmd(evt *tcell.EventKey) *tcell.EventKey {
 	if !ok {
 		return nil
 	}
-
-	dialog.ShowPortForward(c.App().Content.Pages, c.preparePort(ports), c.portForward)
+	ShowPortForwards(c, c.GetTable().Path, ports, startFwdCB)
 
 	return nil
 }
 
 func (c *Container) isForwardable(path string) ([]string, bool) {
-	state := c.GetTable().GetSelectedCell(3)
-	if state != "Running" {
+	po, err := fetchPod(c.App().factory, c.GetTable().Path)
+	if err != nil {
+		return nil, false
+	}
+
+	cc := po.Spec.Containers
+	var co *v1.Container
+	for i := range cc {
+		if cc[i].Name == path {
+			co = &cc[i]
+		}
+	}
+	if co == nil {
+		log.Error().Err(fmt.Errorf("unable to locate container named %q", path))
+		return nil, false
+	}
+
+	var cs *v1.ContainerStatus
+	ss := po.Status.ContainerStatuses
+	for i := range ss {
+		if ss[i].Name == path {
+			cs = &ss[i]
+		}
+	}
+	if cs == nil {
+		log.Error().Err(fmt.Errorf("unable to locate container status named %q", path))
+		return nil, false
+	}
+
+	if render.ToContainerState(cs.State) != "Running" {
 		c.App().Flash().Err(fmt.Errorf("Container %s is not running?", path))
 		return nil, false
 	}
 
-	portC := c.GetTable().GetSelectedCell(11)
+	portC := render.ToContainerPorts(co.Ports)
 	ports := strings.Split(portC, ",")
 	if len(ports) == 0 {
 		c.App().Flash().Err(errors.New("Container exposes no ports"))
 		return nil, false
 	}
 
-	return ports, true
-}
-
-func (c *Container) preparePort(pp []string) string {
-	var port string
-	for _, p := range pp {
+	pp := make([]string, 0, len(ports))
+	for _, p := range ports {
 		if !isTCPPort(p) {
 			continue
 		}
-		port = strings.TrimSpace(p)
-		tokens := strings.Split(port, ":")
-		if len(tokens) == 2 {
-			port = tokens[1]
-		}
-		break
-	}
-	if port == "" {
-		c.App().Flash().Warn("No valid TCP port found on this container. User will specify...")
-		return "MY_TCP_PORT!"
+		pp = append(pp, path+"/"+p)
 	}
 
-	return port
-}
-
-func (c *Container) portForward(address, lport, cport string) {
-	co := c.GetTable().GetSelectedCell(0)
-	pf := dao.NewPortForwarder(c.App().Conn())
-	ports := []string{lport + ":" + cport}
-	fw, err := pf.Start(c.GetTable().Path, co, address, ports)
-	if err != nil {
-		c.App().Flash().Err(err)
-		return
-	}
-
-	log.Debug().Msgf(">>> Starting port forward %q %v", c.GetTable().Path, ports)
-	go c.runForward(pf, fw)
-}
-
-func (c *Container) runForward(pf *dao.PortForwarder, f *portforward.PortForwarder) {
-	c.App().QueueUpdateDraw(func() {
-		c.App().factory.AddForwarder(pf)
-		c.App().Flash().Infof("PortForward activated %s:%s", pf.Path(), pf.Ports()[0])
-		dialog.DismissPortForward(c.App().Content.Pages)
-	})
-
-	pf.SetActive(true)
-	if err := f.ForwardPorts(); err != nil {
-		c.App().Flash().Err(err)
-		return
-	}
-	c.App().QueueUpdateDraw(func() {
-		c.App().factory.DeleteForwarder(pf.FQN())
-		pf.SetActive(false)
-	})
+	return pp, true
 }

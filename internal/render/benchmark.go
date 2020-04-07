@@ -1,6 +1,7 @@
 package render
 
 import (
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -8,10 +9,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/tview"
 	"github.com/gdamore/tcell"
-	"golang.org/x/text/language"
-	"golang.org/x/text/message"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -28,29 +28,28 @@ var (
 type Benchmark struct{}
 
 // ColorerFunc colors a resource row.
-func (Benchmark) ColorerFunc() ColorerFunc {
-	return func(ns string, re RowEvent) tcell.Color {
-		c := tcell.ColorPaleGreen
-		statusCol := 2
-		if strings.TrimSpace(re.Row.Fields[statusCol]) != "pass" {
-			c = ErrColor
+func (b Benchmark) ColorerFunc() ColorerFunc {
+	return func(ns string, h Header, re RowEvent) tcell.Color {
+		if !Happy(ns, h, re.Row) {
+			return ErrColor
 		}
-		return c
+		return tcell.ColorPaleGreen
 	}
 }
 
 // Header returns a header row.
-func (Benchmark) Header(ns string) HeaderRow {
-	return HeaderRow{
-		Header{Name: "NAMESPACE"},
-		Header{Name: "NAME"},
-		Header{Name: "STATUS"},
-		Header{Name: "TIME"},
-		Header{Name: "REQ/S", Align: tview.AlignRight},
-		Header{Name: "2XX", Align: tview.AlignRight},
-		Header{Name: "4XX/5XX", Align: tview.AlignRight},
-		Header{Name: "REPORT"},
-		Header{Name: "AGE", Decorator: AgeDecorator},
+func (Benchmark) Header(ns string) Header {
+	return Header{
+		HeaderColumn{Name: "NAMESPACE"},
+		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "STATUS"},
+		HeaderColumn{Name: "TIME"},
+		HeaderColumn{Name: "REQ/S", Align: tview.AlignRight},
+		HeaderColumn{Name: "2XX", Align: tview.AlignRight},
+		HeaderColumn{Name: "4XX/5XX", Align: tview.AlignRight},
+		HeaderColumn{Name: "REPORT"},
+		HeaderColumn{Name: "VALID", Wide: true},
+		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
 	}
 }
 
@@ -72,6 +71,24 @@ func (b Benchmark) Render(o interface{}, ns string, r *Row) error {
 		return err
 	}
 	b.augmentRow(r.Fields, data)
+	r.Fields[8] = asStatus(b.diagnose(ns, r.Fields))
+
+	return nil
+}
+
+// Happy returns true if resoure is happy, false otherwise
+func (Benchmark) diagnose(ns string, ff Fields) error {
+	statusCol := 3
+	if !client.IsAllNamespaces(ns) {
+		statusCol--
+	}
+
+	if len(ff) < statusCol {
+		return nil
+	}
+	if ff[statusCol] != "pass" {
+		return errors.New("failed benchmark")
+	}
 
 	return nil
 }
@@ -87,7 +104,7 @@ func (Benchmark) readFile(file string) (string, error) {
 	return string(data), nil
 }
 
-func (Benchmark) initRow(row Fields, f os.FileInfo) error {
+func (b Benchmark) initRow(row Fields, f os.FileInfo) error {
 	tokens := strings.Split(f.Name(), "_")
 	if len(tokens) < 2 {
 		return fmt.Errorf("Invalid file name %s", f.Name())
@@ -95,7 +112,7 @@ func (Benchmark) initRow(row Fields, f os.FileInfo) error {
 	row[0] = tokens[0]
 	row[1] = tokens[1]
 	row[7] = f.Name()
-	row[8] = timeToAge(f.ModTime())
+	row[9] = timeToAge(f.ModTime())
 
 	return nil
 }
@@ -144,13 +161,7 @@ func (Benchmark) countReq(rr [][]string) string {
 			sum += m
 		}
 	}
-	return asNum(sum)
-}
-
-// AsNumb prints a number with thousand separator.
-func asNum(n int) string {
-	p := message.NewPrinter(language.English)
-	return p.Sprintf("%d", n)
+	return AsThousands(int64(sum))
 }
 
 // BenchInfo represents benchmark run info.

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/derailed/k9s/internal"
@@ -16,42 +15,45 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func defaultK9sEnv(app *App, sel string, row render.Row) K9sEnv {
-	ns, n := client.Namespaced(sel)
-	ctx, err := app.Conn().Config().CurrentContextName()
+func k8sEnv(c *client.Config) Env {
+	ctx, err := c.CurrentContextName()
 	if err != nil {
 		ctx = render.NAValue
 	}
-	cluster, err := app.Conn().Config().CurrentClusterName()
+	cluster, err := c.CurrentClusterName()
 	if err != nil {
 		cluster = render.NAValue
 	}
-	user, err := app.Conn().Config().CurrentUserName()
+	user, err := c.CurrentUserName()
 	if err != nil {
 		user = render.NAValue
 	}
-	groups, err := app.Conn().Config().CurrentGroupNames()
+	groups, err := c.CurrentGroupNames()
 	if err != nil {
 		groups = []string{render.NAValue}
 	}
+
 	var cfg string
-	kcfg := app.Conn().Config().Flags().KubeConfig
+	kcfg := c.Flags().KubeConfig
 	if kcfg != nil && *kcfg != "" {
 		cfg = *kcfg
 	}
 
-	env := K9sEnv{
-		"NAMESPACE":  ns,
-		"NAME":       n,
+	return Env{
 		"CONTEXT":    ctx,
 		"CLUSTER":    cluster,
 		"USER":       user,
 		"GROUPS":     strings.Join(groups, ","),
 		"KUBECONFIG": cfg,
 	}
+}
 
-	for i, r := range row.Fields {
-		env["COL"+strconv.Itoa(i)] = r
+func defaultEnv(c *client.Config, path string, header render.Header, row render.Row) Env {
+	env := k8sEnv(c)
+	log.Debug().Msgf("PATH %q::%q", path, row.Fields[1])
+	env["NAMESPACE"], env["NAME"] = client.Namespaced(path)
+	for _, col := range header.Columns(true) {
+		env["COL-"+col] = row.Fields[header.IndexOf(col, true)]
 	}
 
 	return env
@@ -67,7 +69,7 @@ func describeResource(app *App, model ui.Tabular, gvr, path string) {
 		return
 	}
 
-	details := NewDetails(app, "Describe", path).Update(yaml)
+	details := NewDetails(app, "Describe", path, true).Update(yaml)
 	if err := app.inject(details); err != nil {
 		app.Flash().Err(err)
 	}
@@ -82,7 +84,6 @@ func showPodsWithLabels(app *App, path string, sel map[string]string) {
 }
 
 func showPods(app *App, path, labelSel, fieldSel string) {
-	log.Debug().Msgf("SHOW PODS %q -- %q -- %q", path, labelSel, fieldSel)
 	app.switchNS(client.AllNamespaces)
 
 	v := NewPod(client.NewGVR("v1/pods"))
@@ -105,9 +106,9 @@ func podCtx(app *App, path, labelSel, fieldSel string) ContextFunc {
 
 		ns, _ := client.Namespaced(path)
 		mx := client.NewMetricsServer(app.factory.Client())
-		nmx, err := mx.FetchPodsMetrics(ns)
+		nmx, err := mx.FetchPodsMetrics(ctx, ns)
 		if err != nil {
-			log.Warn().Err(err).Msgf("No pods metrics")
+			log.Debug().Err(err).Msgf("No pods metrics")
 		}
 		ctx = context.WithValue(ctx, internal.KeyMetrics, nmx)
 

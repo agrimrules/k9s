@@ -20,22 +20,20 @@ func (NetworkPolicy) ColorerFunc() ColorerFunc {
 }
 
 // Header returns a header row.
-func (NetworkPolicy) Header(ns string) HeaderRow {
-	var h HeaderRow
-	if client.IsAllNamespaces(ns) {
-		h = append(h, Header{Name: "NAMESPACE"})
+func (NetworkPolicy) Header(ns string) Header {
+	return Header{
+		HeaderColumn{Name: "NAMESPACE"},
+		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "ING-SELECTOR", Wide: true},
+		HeaderColumn{Name: "ING-PORTS"},
+		HeaderColumn{Name: "ING-BLOCK"},
+		HeaderColumn{Name: "EGR-SELECTOR", Wide: true},
+		HeaderColumn{Name: "EGR-PORTS"},
+		HeaderColumn{Name: "EGR-BLOCK"},
+		HeaderColumn{Name: "LABELS", Wide: true},
+		HeaderColumn{Name: "VALID", Wide: true},
+		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
 	}
-
-	return append(h,
-		Header{Name: "NAME"},
-		Header{Name: "ING-SELECTOR"},
-		Header{Name: "ING-PORTS"},
-		Header{Name: "ING-BLOCK"},
-		Header{Name: "EGR-SELECTOR"},
-		Header{Name: "EGR-PORTS"},
-		Header{Name: "EGR-BLOCK"},
-		Header{Name: "AGE", Decorator: AgeDecorator},
-	)
 }
 
 // Render renders a K8s resource to screen.
@@ -54,11 +52,8 @@ func (n NetworkPolicy) Render(o interface{}, ns string, r *Row) error {
 	ep, es, eb := egress(np.Spec.Egress)
 
 	r.ID = client.MetaFQN(np.ObjectMeta)
-	r.Fields = make(Fields, 0, len(n.Header(ns)))
-	if client.IsAllNamespaces(ns) {
-		r.Fields = append(r.Fields, np.Namespace)
-	}
-	r.Fields = append(r.Fields,
+	r.Fields = Fields{
+		np.Namespace,
 		np.Name,
 		is,
 		ip,
@@ -66,8 +61,10 @@ func (n NetworkPolicy) Render(o interface{}, ns string, r *Row) error {
 		es,
 		ep,
 		eb,
+		mapToStr(np.Labels),
+		"",
 		toAge(np.ObjectMeta.CreationTimestamp),
-	)
+	}
 
 	return nil
 }
@@ -111,7 +108,14 @@ func egress(ee []v1beta1.NetworkPolicyEgressRule) (string, string, string) {
 func portsToStr(pp []v1beta1.NetworkPolicyPort) string {
 	ports := make([]string, 0, len(pp))
 	for _, p := range pp {
-		ports = append(ports, string(*p.Protocol)+":"+p.Port.String())
+		proto, port := NAValue, NAValue
+		if p.Protocol != nil {
+			proto = string(*p.Protocol)
+		}
+		if p.Port != nil {
+			port = p.Port.String()
+		}
+		ports = append(ports, proto+":"+port)
 	}
 	return strings.Join(ports, ",")
 }

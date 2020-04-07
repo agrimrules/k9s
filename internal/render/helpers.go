@@ -1,6 +1,7 @@
 package render
 
 import (
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -9,15 +10,71 @@ import (
 	"github.com/derailed/tview"
 	runewidth "github.com/mattn/go-runewidth"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/duration"
 )
 
-const megaByte = 1024 * 1024
+var durationRx = regexp.MustCompile(`\A(\d*d)*?(\d*h)*?(\d*m)*?(\d*s)*?\z`)
 
-// ToMB converts bytes to megabytes.
-func ToMB(v int64) float64 {
-	return float64(v) / megaByte
+func durationToSeconds(duration string) string {
+	tokens := durationRx.FindAllStringSubmatch(duration, -1)
+	if len(tokens) == 0 {
+		return duration
+	}
+	if len(tokens[0]) < 5 {
+		return duration
+	}
+
+	d, h, m, s := tokens[0][1], tokens[0][2], tokens[0][3], tokens[0][4]
+	var n int
+	if v, err := strconv.Atoi(strings.Replace(d, "d", "", 1)); err == nil {
+		n += v * 24 * 60 * 60
+	}
+	if v, err := strconv.Atoi(strings.Replace(h, "h", "", 1)); err == nil {
+		n += v * 60 * 60
+	}
+	if v, err := strconv.Atoi(strings.Replace(m, "m", "", 1)); err == nil {
+		n += v * 60
+	}
+	if v, err := strconv.Atoi(strings.Replace(s, "s", "", 1)); err == nil {
+		n += v
+	}
+
+	return strconv.Itoa(n)
+}
+
+// AsThousands prints a number with thousand separator.
+func AsThousands(n int64) string {
+	p := message.NewPrinter(language.English)
+	return p.Sprintf("%d", n)
+}
+
+// Happy returns true if resoure is happy, false otherwise
+func Happy(ns string, h Header, r Row) bool {
+	if len(r.Fields) == 0 {
+		return true
+	}
+	validCol := h.IndexOf("VALID", true)
+	if validCol < 0 {
+		return true
+	}
+	return strings.TrimSpace(r.Fields[validCol]) == ""
+}
+
+// const megaByte = 1024 * 1024
+
+// // ToMB converts bytes to megabytes.
+// func ToMB(v int64) float64 {
+// 	return float64(v) / megaByte
+// }
+
+func asStatus(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func asSelector(s *metav1.LabelSelector) string {
@@ -31,11 +88,11 @@ func asSelector(s *metav1.LabelSelector) string {
 }
 
 type metric struct {
-	cpu, mem string
+	cpu, mem, cpuLim, memLim string
 }
 
 func noMetric() metric {
-	return metric{cpu: NAValue, mem: NAValue}
+	return metric{cpu: NAValue, mem: NAValue, cpuLim: NAValue, memLim: NAValue}
 }
 
 // ToSelector flattens a map selector to a string selector.
@@ -84,7 +141,7 @@ func join(a []string, sep string) string {
 
 	var buff strings.Builder
 	buff.Grow(n)
-	buff.WriteString(a[0])
+	buff.WriteString(b[0])
 	for _, s := range b[1:] {
 		buff.WriteString(sep)
 		buff.WriteString(s)
@@ -93,17 +150,14 @@ func join(a []string, sep string) string {
 	return buff.String()
 }
 
-// AsPerc prints a number as a percentage.
-func AsPerc(f float64) string {
-	return strconv.Itoa(int(f))
+// PrintPerc prints a number as percentage.
+func PrintPerc(p int) string {
+	return strconv.Itoa(p) + "%"
 }
 
-// ToPerc computes the ratio of two numbers as a percentage.
-func toPerc(v1, v2 float64) float64 {
-	if v2 == 0 {
-		return 0
-	}
-	return (v1 / v2) * 100
+// IntToStr converts an int to a string.
+func IntToStr(p int) string {
+	return strconv.Itoa(int(p))
 }
 
 func missing(s string) string {
@@ -151,7 +205,7 @@ func Truncate(str string, width int) string {
 
 func mapToStr(m map[string]string) (s string) {
 	if len(m) == 0 {
-		return MissingValue
+		return ""
 	}
 
 	kk := make([]string, 0, len(m))
@@ -163,7 +217,40 @@ func mapToStr(m map[string]string) (s string) {
 	for i, k := range kk {
 		s += k + "=" + m[k]
 		if i < len(kk)-1 {
-			s += ","
+			s += " "
+		}
+	}
+
+	return
+}
+
+func mapToIfc(m interface{}) (s string) {
+	if m == nil {
+		return ""
+	}
+
+	mm, ok := m.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if len(mm) == 0 {
+		return ""
+	}
+
+	kk := make([]string, 0, len(mm))
+	for k := range mm {
+		kk = append(kk, k)
+	}
+	sort.Strings(kk)
+
+	for i, k := range kk {
+		str, ok := mm[k].(string)
+		if !ok {
+			continue
+		}
+		s += k + "=" + str
+		if i < len(kk)-1 {
+			s += " "
 		}
 	}
 
@@ -176,7 +263,7 @@ func ToMillicore(v int64) string {
 }
 
 // ToMi shows mem reading for human.
-func ToMi(v float64) string {
+func ToMi(v int64) string {
 	return strconv.Itoa(int(v))
 }
 

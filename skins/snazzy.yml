@@ -32,16 +32,31 @@ k9s:
       highlightColor: white
       counterColor: white
       filterColor: "#57c7ff"
-  table:
-    fgColor: "#57c7ff"
-    bgColor: "#282a36"
-    cursorColor: "#5af78e"
-    markColor: darkgoldenrod
-    header:
-      fgColor: white
-      bgColor: "#282a36"
-      sorterColor: orange
   views:
+    # Charts skins...
+    charts:
+      bgColor: default
+      defaultDialColors:
+        - "#57c7ff"
+        - "#ff5c57"
+      defaultChartColors:
+        - "#57c7ff"
+        - "#ff5c57"
+    table:
+      fgColor: "#57c7ff"
+      bgColor: "#282a36"
+      cursorColor: "#5af78e"
+      markColor: darkgoldenrod
+      header:
+        fgColor: white
+        bgColor: "#282a36"
+        sorterColor: orange
+    xray:
+      fgColor: "#57c7ff"
+      bgColor: "#282a36"
+      cursorColor: "#5af78e"
+      graphicColor: darkgoldenrod
+      showIcons: false
     yaml:
       keyColor: "#ff5c57"
       colonColor: white
@@ -49,3 +64,6 @@ k9s:
     logs:
       fgColor: white
       bgColor: "#282a36"
+      indicator:
+        fgColor: white
+        bgColor: "#282a36"

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/derailed/k9s/internal/config"
+	"github.com/derailed/k9s/internal/model"
+	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/tview"
 	"github.com/gdamore/tcell"
 )
@@ -41,6 +43,38 @@ func (s *StatusIndicator) StylesChanged(styles *config.Styles) {
 	s.styles = styles
 	s.SetBackgroundColor(styles.BgColor())
 	s.SetTextColor(styles.FgColor())
+}
+
+const statusIndicatorFmt = "[orange::b]K9s [aqua::]%s [white::]%s:%s:%s [lawngreen::]%s[white::]::[darkturquoise::]%s"
+
+// ClusterInfoUpdated notifies the cluster meta was updated.
+func (s *StatusIndicator) ClusterInfoUpdated(data model.ClusterMeta) {
+	s.app.QueueUpdateDraw(func() {
+		s.SetPermanent(fmt.Sprintf(
+			statusIndicatorFmt,
+			data.K9sVer,
+			data.Cluster,
+			data.User,
+			data.K8sVer,
+			render.PrintPerc(data.Cpu),
+			render.PrintPerc(data.Mem),
+		))
+	})
+}
+
+// ClusterInfoChanged notifies the cluster meta was changed.
+func (s *StatusIndicator) ClusterInfoChanged(prev, cur model.ClusterMeta) {
+	s.app.QueueUpdateDraw(func() {
+		s.SetPermanent(fmt.Sprintf(
+			statusIndicatorFmt,
+			cur.K9sVer,
+			cur.Cluster,
+			cur.User,
+			cur.K8sVer,
+			AsPercDelta(prev.Cpu, cur.Cpu),
+			AsPercDelta(prev.Cpu, cur.Mem),
+		))
+	})
 }
 
 // SetPermanent sets permanent title to be reset to after updates
@@ -92,4 +126,16 @@ func (s *StatusIndicator) setText(msg string) {
 			})
 		}
 	}(ctx)
+}
+
+// Helpers...
+
+// AsPercDelta represents a percentage with a delta indicator.
+func AsPercDelta(ov, nv int) string {
+	prev, cur := render.IntToStr(ov), render.IntToStr(nv)
+	if cur == "0" {
+		return render.NAValue
+	}
+
+	return cur + "%" + Deltas(prev, cur)
 }

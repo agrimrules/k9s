@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/dao"
@@ -23,6 +24,7 @@ type Command struct {
 	app *App
 
 	alias *dao.Alias
+	mx    sync.Mutex
 }
 
 // NewCommand returns a new command.
@@ -43,6 +45,21 @@ func (c *Command) Init() error {
 	return nil
 }
 
+// Reset resets Command and reload aliases.
+func (c *Command) Reset(clear bool) error {
+	c.mx.Lock()
+	defer c.mx.Unlock()
+
+	if clear {
+		c.alias.Clear()
+	}
+	if _, err := c.alias.Ensure(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func allowedXRay(gvr client.GVR) bool {
 	gg := []string{
 		"v1/pods",
@@ -52,7 +69,6 @@ func allowedXRay(gvr client.GVR) bool {
 		"apps/v1/statefulsets",
 		"apps/v1/replicasets",
 	}
-
 	for _, g := range gg {
 		if g == gvr.String() {
 			return true
@@ -69,10 +85,10 @@ func (c *Command) xrayCmd(cmd string) error {
 	}
 	gvr, ok := c.alias.AsGVR(tokens[1])
 	if !ok {
-		return fmt.Errorf("Huh? `%s` Command not found", cmd)
+		return fmt.Errorf("Huh? `%s` command not found", cmd)
 	}
 	if !allowedXRay(gvr) {
-		return fmt.Errorf("Huh? `%s` Command not found", cmd)
+		return fmt.Errorf("Huh? `%s` command not found", cmd)
 	}
 
 	x := NewXray(gvr)
@@ -90,17 +106,34 @@ func (c *Command) xrayCmd(cmd string) error {
 	return c.exec(cmd, "xrays", x, true)
 }
 
+func (c *Command) checkAccess(gvr string) error {
+	m, err := dao.MetaAccess.MetaFor(client.NewGVR(gvr))
+	if err != nil {
+		return err
+	}
+	ns := client.CleanseNamespace(c.app.Config.ActiveNamespace())
+	if dao.IsK8sMeta(m) && c.app.ConOK() {
+		if _, e := c.app.factory.CanForResource(ns, gvr, client.MonitorAccess); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
 // Exec the Command by showing associated display.
 func (c *Command) run(cmd, path string, clearStack bool) error {
 	if c.specialCmd(cmd) {
 		return nil
 	}
-
 	cmds := strings.Split(cmd, " ")
 	gvr, v, err := c.viewMetaFor(cmds[0])
 	if err != nil {
 		return err
 	}
+	if err := c.checkAccess(gvr); err != nil {
+		return err
+	}
+
 	switch cmds[0] {
 	case "ctx", "context", "contexts":
 		if len(cmds) == 2 {
@@ -117,23 +150,19 @@ func (c *Command) run(cmd, path string, clearStack bool) error {
 		if !c.app.switchNS(ns) {
 			return fmt.Errorf("namespace switch failed for ns %q", ns)
 		}
-
+		if !c.alias.Check(cmds[0]) {
+			return fmt.Errorf("Huh? `%s` Command not found", cmd)
+		}
 		return c.exec(cmd, gvr, c.componentFor(gvr, path, v), clearStack)
 	}
 }
 
-// Reset resets Command and reload aliases.
-func (c *Command) Reset() error {
-	c.alias.Clear()
-	if _, err := c.alias.Ensure(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func (c *Command) defaultCmd() error {
-	return c.run(c.app.Config.ActiveView(), "", true)
+	if err := c.run(c.app.Config.ActiveView(), "", true); err != nil {
+		log.Error().Err(err).Msgf("Saved command failed. Loading default view")
+		return c.run("pod", "", true)
+	}
+	return nil
 }
 
 func (c *Command) specialCmd(cmd string) bool {
@@ -172,7 +201,7 @@ func (c *Command) specialCmd(cmd string) bool {
 func (c *Command) viewMetaFor(cmd string) (string, *MetaViewer, error) {
 	gvr, ok := c.alias.AsGVR(cmd)
 	if !ok {
-		return "", nil, fmt.Errorf("Huh? `%s` Command not found", cmd)
+		return "", nil, fmt.Errorf("Huh? `%s` command not found", cmd)
 	}
 
 	v, ok := customViewers[gvr]
@@ -186,16 +215,13 @@ func (c *Command) viewMetaFor(cmd string) (string, *MetaViewer, error) {
 func (c *Command) componentFor(gvr, path string, v *MetaViewer) ResourceViewer {
 	var view ResourceViewer
 	if v.viewerFn != nil {
-		log.Debug().Msgf("Custom viewer for %s", gvr)
 		view = v.viewerFn(client.NewGVR(gvr))
 	} else {
-		log.Debug().Msgf("Generic viewer for %s", gvr)
 		view = NewBrowser(client.NewGVR(gvr))
 	}
 
 	view.SetInstance(path)
 	if v.enterFn != nil {
-		log.Debug().Msgf("SETTING CUSTOM ENTER ON %s", gvr)
 		view.GetTable().SetEnterFn(v.enterFn)
 	}
 
@@ -204,7 +230,7 @@ func (c *Command) componentFor(gvr, path string, v *MetaViewer) ResourceViewer {
 
 func (c *Command) exec(cmd, gvr string, comp model.Component, clearStack bool) error {
 	if comp == nil {
-		return fmt.Errorf("No component given for %s", gvr)
+		return fmt.Errorf("No component found for %s", gvr)
 	}
 	c.app.Flash().Infof("Viewing %s...", client.NewGVR(gvr).R())
 	c.app.Config.SetActiveView(cmd)
@@ -215,5 +241,10 @@ func (c *Command) exec(cmd, gvr string, comp model.Component, clearStack bool) e
 		c.app.Content.Stack.Clear()
 	}
 
-	return c.app.inject(comp)
+	if err := c.app.inject(comp); err != nil {
+		return err
+	}
+
+	c.app.history.Push(cmd)
+	return nil
 }

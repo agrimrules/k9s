@@ -1,8 +1,9 @@
 NAME    := k9s
 PACKAGE := github.com/derailed/$(NAME)
 GIT     := $(shell git rev-parse --short HEAD)
-DATE    := $(shell date +%FT%T%Z)
-VERSION  := v0.12.0
+SOURCE_DATE_EPOCH ?= $(shell date +%s)
+DATE    := $(shell date -u -d @${SOURCE_DATE_EPOCH} +%FT%T%Z)
+VERSION  ?= v0.17.6
 IMG_NAME := derailed/k9s
 IMAGE    := ${IMG_NAME}:${VERSION}
 
@@ -18,7 +19,7 @@ cover:     ## Run test coverage suite
 
 build:     ## Builds the CLI
 	@go build \
-	-ldflags "-w -X ${PACKAGE}/cmd.version=${VERSION} -X ${PACKAGE}/cmd.commit=${GIT} -X ${PACKAGE}/cmd.date=${DATE}" \
+	-ldflags "-w -s -X ${PACKAGE}/cmd.version=${VERSION} -X ${PACKAGE}/cmd.commit=${GIT} -X ${PACKAGE}/cmd.date=${DATE}" \
 	-a -tags netgo -o execs/${NAME} main.go
 
 img:  ## Build Docker Image

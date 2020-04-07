@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/derailed/k9s/internal"
+	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/model"
 	"github.com/derailed/k9s/internal/render"
@@ -15,35 +16,35 @@ import (
 )
 
 func TestTableNew(t *testing.T) {
-	v := ui.NewTable("fred")
-	ctx := context.WithValue(context.Background(), internal.KeyStyles, config.NewStyles())
-	v.Init(ctx)
+	v := ui.NewTable(client.NewGVR("fred"))
+	v.Init(makeContext())
 
-	assert.Equal(t, "fred", v.BaseTitle)
+	assert.Equal(t, "fred", v.GVR().String())
 }
 
 func TestTableUpdate(t *testing.T) {
-	v := ui.NewTable("fred")
-	ctx := context.WithValue(context.Background(), internal.KeyStyles, config.NewStyles())
-	v.Init(ctx)
+	v := ui.NewTable(client.NewGVR("fred"))
+	v.Init(makeContext())
 
-	v.Update(makeTableData())
+	data := makeTableData()
+	v.Update(data)
 
-	assert.Equal(t, 3, v.GetRowCount())
-	assert.Equal(t, 3, v.GetColumnCount())
+	assert.Equal(t, len(data.RowEvents)+1, v.GetRowCount())
+	assert.Equal(t, len(data.Header), v.GetColumnCount())
 }
 
 func TestTableSelection(t *testing.T) {
-	v := ui.NewTable("fred")
-	ctx := context.WithValue(context.Background(), internal.KeyStyles, config.NewStyles())
-	v.Init(ctx)
+	v := ui.NewTable(client.NewGVR("fred"))
+	v.Init(makeContext())
 	m := &testModel{}
 	v.SetModel(m)
 	v.Update(m.Peek())
 	v.SelectRow(1, true)
 
+	r, ok := v.GetSelectedRow("r1")
+	assert.True(t, ok)
 	assert.Equal(t, "r1", v.GetSelectedItem())
-	assert.Equal(t, render.Row{ID: "r1", Fields: render.Fields{"blee", "duh", "fred"}}, v.GetSelectedRow())
+	assert.Equal(t, render.Row{ID: "r1", Fields: render.Fields{"blee", "duh", "fred"}}, r)
 	assert.Equal(t, "blee", v.GetSelectedCell(0))
 	assert.Equal(t, 1, v.GetSelectedRowIndex())
 	assert.Equal(t, []string{"r1"}, v.GetSelectedItems())
@@ -62,10 +63,12 @@ var _ ui.Tabular = &testModel{}
 
 func (t *testModel) SetInstance(string)              {}
 func (t *testModel) Empty() bool                     { return false }
+func (t *testModel) HasMetrics() bool                { return true }
 func (t *testModel) Peek() render.TableData          { return makeTableData() }
 func (t *testModel) ClusterWide() bool               { return false }
 func (t *testModel) GetNamespace() string            { return "blee" }
 func (t *testModel) SetNamespace(string)             {}
+func (t *testModel) ToggleToast()                    {}
 func (t *testModel) AddListener(model.TableListener) {}
 func (t *testModel) Watch(context.Context)           {}
 func (t *testModel) Get(ctx context.Context, path string) (runtime.Object, error) {
@@ -86,10 +89,10 @@ func (t *testModel) SetRefreshRate(time.Duration) {}
 func makeTableData() render.TableData {
 	t := render.NewTableData()
 	t.Namespace = ""
-	t.Header = render.HeaderRow{
-		render.Header{Name: "a"},
-		render.Header{Name: "b"},
-		render.Header{Name: "c"},
+	t.Header = render.Header{
+		render.HeaderColumn{Name: "A"},
+		render.HeaderColumn{Name: "B"},
+		render.HeaderColumn{Name: "C"},
 	}
 	t.RowEvents = render.RowEvents{
 		render.RowEvent{
@@ -107,4 +110,11 @@ func makeTableData() render.TableData {
 	}
 
 	return *t
+}
+
+func makeContext() context.Context {
+	ctx := context.WithValue(context.Background(), internal.KeyStyles, config.NewStyles())
+	ctx = context.WithValue(ctx, internal.KeyViewConfig, config.NewCustomView())
+
+	return ctx
 }

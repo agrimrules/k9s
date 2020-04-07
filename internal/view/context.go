@@ -43,6 +43,9 @@ func (c *Context) useCtx(app *App, model ui.Tabular, gvr, path string) {
 }
 
 func useContext(app *App, name string) error {
+	if app.Content.Top() != nil {
+		app.Content.Top().Stop()
+	}
 	res, err := dao.AccessorFor(app.factory, client.NewGVR("contexts"))
 	if err != nil {
 		return nil
@@ -52,9 +55,10 @@ func useContext(app *App, name string) error {
 		return errors.New("Expecting a switchable resource")
 	}
 	if err := switcher.Switch(name); err != nil {
+		log.Error().Err(err).Msgf("Context switch failed")
 		return err
 	}
-	if err := app.switchCtx(name, false); err != nil {
+	if err := app.switchCtx(name, true); err != nil {
 		return err
 	}
 

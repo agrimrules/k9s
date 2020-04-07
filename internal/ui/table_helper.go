@@ -14,6 +14,9 @@ import (
 )
 
 const (
+	// DefaultColorName indicator to keep term colors.
+	DefaultColorName = "default"
+
 	// SearchFmt represents a filter view title.
 	SearchFmt = "<[filter:bg:r]/%s[fg:bg:-]> "
 
@@ -40,7 +43,7 @@ var (
 	fuzzyRx = regexp.MustCompile(`\A\-f`)
 )
 
-func mustExtractSyles(ctx context.Context) *config.Styles {
+func mustExtractStyles(ctx context.Context) *config.Styles {
 	styles, ok := ctx.Value(internal.KeyStyles).(*config.Styles)
 	if !ok {
 		log.Fatal().Msg("Expecting valid styles")
@@ -81,26 +84,30 @@ func TrimLabelSelector(s string) string {
 
 // SkinTitle decorates a title.
 func SkinTitle(fmat string, style config.Frame) string {
-	fmat = strings.Replace(fmat, "[fg:bg", "["+style.Title.FgColor+":"+style.Title.BgColor, -1)
-	fmat = strings.Replace(fmat, "[hilite", "["+style.Title.HighlightColor, 1)
-	fmat = strings.Replace(fmat, "[key", "["+style.Menu.NumKeyColor, 1)
-	fmat = strings.Replace(fmat, "[filter", "["+style.Title.FilterColor, 1)
-	fmat = strings.Replace(fmat, "[count", "["+style.Title.CounterColor, 1)
-	fmat = strings.Replace(fmat, ":bg:", ":"+style.Title.BgColor+":", -1)
+	bgColor := style.Title.BgColor
+	if bgColor == config.DefaultColor {
+		bgColor = config.TransparentColor
+	}
+	fmat = strings.Replace(fmat, "[fg:bg", "["+style.Title.FgColor.String()+":"+bgColor.String(), -1)
+	fmat = strings.Replace(fmat, "[hilite", "["+style.Title.HighlightColor.String(), 1)
+	fmat = strings.Replace(fmat, "[key", "["+style.Menu.NumKeyColor.String(), 1)
+	fmat = strings.Replace(fmat, "[filter", "["+style.Title.FilterColor.String(), 1)
+	fmat = strings.Replace(fmat, "[count", "["+style.Title.CounterColor.String(), 1)
+	fmat = strings.Replace(fmat, ":bg:", ":"+bgColor.String()+":", -1)
 
 	return fmat
 }
 
-func sortIndicator(col SortColumn, style config.Table, index int, name string) string {
-	if col.index != index {
+func sortIndicator(sort, asc bool, style config.Table, name string) string {
+	if !sort {
 		return name
 	}
 
 	order := descIndicator
-	if col.asc {
+	if asc {
 		order = ascIndicator
 	}
-	return fmt.Sprintf("%s[%s::]%s[::]", name, style.Header.SorterColor, order)
+	return fmt.Sprintf("%s[%s::b]%s[::]", name, style.Header.SorterColor, order)
 }
 
 func formatCell(field string, padding int) string {
@@ -109,6 +116,25 @@ func formatCell(field string, padding int) string {
 	}
 
 	return field
+}
+
+func filterToast(data render.TableData) render.TableData {
+	validX := data.Header.IndexOf("VALID", true)
+	if validX == -1 {
+		return data
+	}
+
+	toast := render.TableData{
+		Header:    data.Header,
+		RowEvents: make(render.RowEvents, 0, len(data.RowEvents)),
+		Namespace: data.Namespace,
+	}
+	for _, re := range data.RowEvents {
+		if re.Row.Fields[validX] != "" {
+			toast.RowEvents = append(toast.RowEvents, re)
+		}
+	}
+	return toast
 }
 
 func rxFilter(q string, data render.TableData) (render.TableData, error) {
@@ -123,8 +149,7 @@ func rxFilter(q string, data render.TableData) (render.TableData, error) {
 		Namespace: data.Namespace,
 	}
 	for _, re := range data.RowEvents {
-		f := strings.Join(re.Row.Fields, " ")
-		if rx.MatchString(f) {
+		if rx.MatchString(re.Row.ID) {
 			filtered.RowEvents = append(filtered.RowEvents, re)
 		}
 	}
@@ -132,10 +157,11 @@ func rxFilter(q string, data render.TableData) (render.TableData, error) {
 	return filtered, nil
 }
 
-func fuzzyFilter(q string, index int, data render.TableData) render.TableData {
+func fuzzyFilter(q string, data render.TableData) render.TableData {
+	q = strings.TrimSpace(q)
 	var ss []string
 	for _, re := range data.RowEvents {
-		ss = append(ss, re.Row.Fields[index])
+		ss = append(ss, re.Row.ID)
 	}
 
 	filtered := render.TableData{

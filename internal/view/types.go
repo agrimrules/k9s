@@ -8,9 +8,20 @@ import (
 	"github.com/derailed/k9s/internal/ui"
 )
 
+const (
+	ageCol      = "AGE"
+	nameCol     = "NAME"
+	statusCol   = "STATUS"
+	cpuCol      = "CPU"
+	memCol      = "MEM"
+	uptodateCol = "UP-TO-DATE"
+	readyCol    = "READY"
+	availCol    = "AVAILABLE"
+)
+
 type (
 	// EnvFunc represent the current view exposed environment.
-	EnvFunc func() K9sEnv
+	EnvFunc func() Env
 
 	// BoostActionsFunc extends viewer keyboard actions.
 	BoostActionsFunc func(ui.KeyActions)
@@ -70,13 +81,15 @@ type ResourceViewer interface {
 	SetEnvFn(EnvFunc)
 
 	// GVR returns a resource descriptor.
-	GVR() string
+	GVR() client.GVR
 
 	// SetContextFn provision a custom context.
 	SetContextFn(ContextFunc)
 
 	// SetBindKeys provision additional key bindings.
 	SetBindKeysFn(BindKeysFunc)
+
+	// SetInstance sets a parent FQN
 	SetInstance(string)
 }
 

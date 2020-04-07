@@ -18,18 +18,18 @@ import (
 
 func TestLogFullBuffer(t *testing.T) {
 	size := 4
-	m := model.NewLog(client.NewGVR("fred"), "Blee", makeLogOpts(size), 10*time.Millisecond)
+	m := model.NewLog(client.NewGVR("fred"), makeLogOpts(size), 10*time.Millisecond)
 	m.Init(makeFactory())
 
 	v := newTestView()
 	m.AddListener(v)
 
-	data := make([]string, 0, 2*size)
+	data := make(dao.LogItems, 0, 2*size)
 	for i := 0; i < 2*size; i++ {
-		data = append(data, "line"+strconv.Itoa(i))
+		data = append(data, dao.NewLogItemFromString("line"+strconv.Itoa(i)))
 		m.Append(data[i])
 	}
-	m.Notify(false)
+	m.Notify(true)
 
 	assert.Equal(t, 1, v.dataCalled)
 	assert.Equal(t, 1, v.clearCalled)
@@ -47,8 +47,8 @@ func TestLogFilter(t *testing.T) {
 			e: 2,
 		},
 		"regexp": {
-			q: `\Apod-line-[1-3]{1}\z`,
-			e: 3,
+			q: `pod-line-[1-3]{1}`,
+			e: 4,
 		},
 		"fuzzy": {
 			q: `-f po-l1`,
@@ -60,28 +60,28 @@ func TestLogFilter(t *testing.T) {
 	for k := range uu {
 		u := uu[k]
 		t.Run(k, func(t *testing.T) {
-			m := model.NewLog(client.NewGVR("fred"), "Blee", makeLogOpts(size), 10*time.Millisecond)
+			m := model.NewLog(client.NewGVR("fred"), makeLogOpts(size), 10*time.Millisecond)
 			m.Init(makeFactory())
 
 			v := newTestView()
 			m.AddListener(v)
 
 			m.Filter(u.q)
-			var data []string
+			var data dao.LogItems
 			for i := 0; i < size; i++ {
-				data = append(data, fmt.Sprintf("pod-line-%d", i+1))
+				data = append(data, dao.NewLogItemFromString(fmt.Sprintf("pod-line-%d", i+1)))
 				m.Append(data[i])
 			}
 
 			m.Notify(true)
-			assert.Equal(t, 2, v.dataCalled)
+			assert.Equal(t, 1, v.dataCalled)
 			assert.Equal(t, 2, v.clearCalled)
 			assert.Equal(t, 0, v.errCalled)
 			assert.Equal(t, u.e, len(v.data))
 
 			m.ClearFilter()
-			assert.Equal(t, 3, v.dataCalled)
-			assert.Equal(t, 2, v.clearCalled)
+			assert.Equal(t, 2, v.dataCalled)
+			assert.Equal(t, 3, v.clearCalled)
 			assert.Equal(t, 0, v.errCalled)
 			assert.Equal(t, size, len(v.data))
 		})
@@ -89,14 +89,14 @@ func TestLogFilter(t *testing.T) {
 }
 
 func TestLogStartStop(t *testing.T) {
-	m := model.NewLog(client.NewGVR("fred"), "Blee", makeLogOpts(4), 10*time.Millisecond)
+	m := model.NewLog(client.NewGVR("fred"), makeLogOpts(4), 10*time.Millisecond)
 	m.Init(makeFactory())
 
 	v := newTestView()
 	m.AddListener(v)
 
 	m.Start()
-	data := []string{"line1", "line2"}
+	data := dao.LogItems{dao.NewLogItemFromString("line1"), dao.NewLogItemFromString("line2")}
 	for _, d := range data {
 		m.Append(d)
 	}
@@ -105,12 +105,12 @@ func TestLogStartStop(t *testing.T) {
 
 	assert.Equal(t, 1, v.dataCalled)
 	assert.Equal(t, 1, v.clearCalled)
-	assert.Equal(t, 0, v.errCalled)
+	assert.Equal(t, 1, v.errCalled)
 	assert.Equal(t, 2, len(v.data))
 }
 
 func TestLogClear(t *testing.T) {
-	m := model.NewLog(client.NewGVR("fred"), "Blee", makeLogOpts(4), 10*time.Millisecond)
+	m := model.NewLog(client.NewGVR("fred"), makeLogOpts(4), 10*time.Millisecond)
 	m.Init(makeFactory())
 	assert.Equal(t, "fred", m.GetPath())
 	assert.Equal(t, "blee", m.GetContainer())
@@ -118,7 +118,7 @@ func TestLogClear(t *testing.T) {
 	v := newTestView()
 	m.AddListener(v)
 
-	data := []string{"line1", "line2"}
+	data := dao.LogItems{dao.NewLogItemFromString("line1"), dao.NewLogItemFromString("line2")}
 	for _, d := range data {
 		m.Append(d)
 	}
@@ -132,61 +132,70 @@ func TestLogClear(t *testing.T) {
 }
 
 func TestLogBasic(t *testing.T) {
-	m := model.NewLog(client.NewGVR("fred"), "Blee", makeLogOpts(2), 10*time.Millisecond)
+	m := model.NewLog(client.NewGVR("fred"), makeLogOpts(2), 10*time.Millisecond)
 	m.Init(makeFactory())
 
 	v := newTestView()
 	m.AddListener(v)
 
-	data := []string{"line1", "line2"}
+	data := dao.LogItems{dao.NewLogItemFromString("line1"), dao.NewLogItemFromString("line2")}
 	m.Set(data)
 
 	assert.Equal(t, 1, v.dataCalled)
-	assert.Equal(t, 0, v.clearCalled)
-	assert.Equal(t, 0, v.errCalled)
-	assert.Equal(t, data, v.data)
-}
-
-func TestLogAppend(t *testing.T) {
-	m := model.NewLog(client.NewGVR("fred"), "blah blah", makeLogOpts(4), 5*time.Millisecond)
-	m.Init(makeFactory())
-
-	v := newTestView()
-	m.AddListener(v)
-	m.Set([]string{"blah blah"})
-	assert.Equal(t, []string{"blah blah"}, v.data)
-
-	data := []string{"line1", "line2"}
-	for _, d := range data {
-		m.Append(d)
-	}
-	assert.Equal(t, 1, v.dataCalled)
-	assert.Equal(t, []string{}, v.data)
-
-	m.Notify(true)
-	assert.Equal(t, 2, v.dataCalled)
 	assert.Equal(t, 1, v.clearCalled)
 	assert.Equal(t, 0, v.errCalled)
 	assert.Equal(t, data, v.data)
 }
 
+func TestLogAppend(t *testing.T) {
+	m := model.NewLog(client.NewGVR("fred"), makeLogOpts(4), 5*time.Millisecond)
+	m.Init(makeFactory())
+
+	v := newTestView()
+	m.AddListener(v)
+	items := dao.LogItems{dao.NewLogItemFromString("blah blah")}
+	m.Set(items)
+	assert.Equal(t, items, v.data)
+
+	data := dao.LogItems{
+		dao.NewLogItemFromString("line1"),
+		dao.NewLogItemFromString("line2"),
+	}
+	for _, d := range data {
+		m.Append(d)
+	}
+	assert.Equal(t, 1, v.dataCalled)
+	assert.Equal(t, items, v.data)
+
+	m.Notify(true)
+	assert.Equal(t, 2, v.dataCalled)
+	assert.Equal(t, 1, v.clearCalled)
+	assert.Equal(t, 0, v.errCalled)
+	assert.Equal(t, append(items, data...), v.data)
+}
+
 func TestLogTimedout(t *testing.T) {
-	m := model.NewLog(client.NewGVR("fred"), "Blee", makeLogOpts(4), 10*time.Millisecond)
+	m := model.NewLog(client.NewGVR("fred"), makeLogOpts(4), 10*time.Millisecond)
 	m.Init(makeFactory())
 
 	v := newTestView()
 	m.AddListener(v)
 
 	m.Filter("line1")
-	data := []string{"line1", "line2", "line3", "line4"}
+	data := dao.LogItems{
+		dao.NewLogItemFromString("line1"),
+		dao.NewLogItemFromString("line2"),
+		dao.NewLogItemFromString("line3"),
+		dao.NewLogItemFromString("line4"),
+	}
 	for _, d := range data {
 		m.Append(d)
 	}
 	m.Notify(true)
-	assert.Equal(t, 2, v.dataCalled)
+	assert.Equal(t, 1, v.dataCalled)
 	assert.Equal(t, 2, v.clearCalled)
 	assert.Equal(t, 0, v.errCalled)
-	assert.Equal(t, []string{"line1"}, v.data)
+	assert.Equal(t, dao.LogItems{data[0]}, v.data)
 }
 
 // ----------------------------------------------------------------------------
@@ -203,7 +212,7 @@ func makeLogOpts(count int) dao.LogOptions {
 // ----------------------------------------------------------------------------
 
 type testView struct {
-	data        []string
+	data        dao.LogItems
 	dataCalled  int
 	clearCalled int
 	errCalled   int
@@ -213,13 +222,13 @@ func newTestView() *testView {
 	return &testView{}
 }
 
-func (t *testView) LogChanged(d []string) {
+func (t *testView) LogChanged(d dao.LogItems) {
 	t.data = d
 	t.dataCalled++
 }
 func (t *testView) LogCleared() {
 	t.clearCalled++
-	t.data = []string{}
+	t.data = dao.LogItems{}
 }
 func (t *testView) LogFailed(err error) {
 	fmt.Println("LogErr", err)

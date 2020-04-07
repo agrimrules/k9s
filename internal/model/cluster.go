@@ -1,7 +1,10 @@
 package model
 
 import (
+	"context"
+
 	"github.com/derailed/k9s/internal/client"
+	"github.com/derailed/k9s/internal/dao"
 	v1 "k8s.io/api/core/v1"
 	mv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
@@ -19,32 +22,30 @@ type (
 	// MetricsService calls the metrics server for metrics info.
 	MetricsService interface {
 		HasMetrics() bool
-		FetchNodesMetrics() (*mv1beta1.NodeMetricsList, error)
-		FetchPodsMetrics(ns string) (*mv1beta1.PodMetricsList, error)
+		FetchNodesMetrics(ctx context.Context) (*mv1beta1.NodeMetricsList, error)
+		FetchPodsMetrics(ctx context.Context, ns string) (*mv1beta1.PodMetricsList, error)
 	}
 
 	// Cluster represents a kubernetes resource.
 	Cluster struct {
-		client client.Connection
-		mx     MetricsServer
+		factory dao.Factory
+		mx      MetricsServer
 	}
 )
 
 // NewCluster returns a new cluster info resource.
-func NewCluster(c client.Connection, mx MetricsServer) *Cluster {
-	return NewClusterWithArgs(c, mx)
-}
-
-// NewClusterWithArgs for tests only!
-func NewClusterWithArgs(c client.Connection, mx MetricsServer) *Cluster {
-	return &Cluster{client: c, mx: mx}
+func NewCluster(f dao.Factory) *Cluster {
+	return &Cluster{
+		factory: f,
+		mx:      client.DialMetrics(f.Client()),
+	}
 }
 
 // Version returns the current K8s cluster version.
 func (c *Cluster) Version() string {
-	info, err := c.client.ServerVersion()
+	info, err := c.factory.Client().ServerVersion()
 	if err != nil {
-		return "n/a"
+		return NA
 	}
 
 	return info.GitVersion
@@ -52,32 +53,42 @@ func (c *Cluster) Version() string {
 
 // ContextName returns the context name.
 func (c *Cluster) ContextName() string {
-	n, err := c.client.Config().CurrentContextName()
+	n, err := c.factory.Client().Config().CurrentContextName()
 	if err != nil {
-		return "n/a"
+		return NA
 	}
 	return n
 }
 
 // ClusterName returns the cluster name.
 func (c *Cluster) ClusterName() string {
-	n, err := c.client.Config().CurrentClusterName()
+	n, err := c.factory.Client().Config().CurrentClusterName()
 	if err != nil {
-		return "n/a"
+		return NA
 	}
 	return n
 }
 
 // UserName returns the user name.
 func (c *Cluster) UserName() string {
-	n, err := c.client.Config().CurrentUserName()
+	n, err := c.factory.Client().Config().CurrentUserName()
 	if err != nil {
-		return "n/a"
+		return NA
 	}
 	return n
 }
 
 // Metrics gathers node level metrics and compute utilization percentages.
-func (c *Cluster) Metrics(nn *v1.NodeList, nmx *mv1beta1.NodeMetricsList, mx *client.ClusterMetrics) error {
+func (c *Cluster) Metrics(ctx context.Context, mx *client.ClusterMetrics) error {
+	nn, err := dao.FetchNodes(ctx, c.factory, "")
+	if err != nil {
+		return err
+	}
+
+	nmx, err := c.mx.FetchNodesMetrics(ctx)
+	if err != nil {
+		return err
+	}
+
 	return c.mx.ClusterLoad(nn, nmx, mx)
 }

@@ -16,40 +16,46 @@ import (
 type PersistentVolume struct{}
 
 // ColorerFunc colors a resource row.
-func (PersistentVolume) ColorerFunc() ColorerFunc {
-	return func(ns string, r RowEvent) tcell.Color {
-		c := DefaultColorer(ns, r)
-		if r.Kind == EventAdd || r.Kind == EventUpdate {
-			return c
+func (p PersistentVolume) ColorerFunc() ColorerFunc {
+	return func(ns string, h Header, re RowEvent) tcell.Color {
+		if !Happy(ns, h, re.Row) {
+			return ErrColor
 		}
 
-		status := strings.TrimSpace(r.Row.Fields[4])
-		switch status {
+		if re.Kind == EventAdd || re.Kind == EventUpdate {
+			return DefaultColorer(ns, h, re)
+		}
+
+		statusCol := h.IndexOf("STATUS", true)
+		if statusCol == -1 {
+			return DefaultColorer(ns, h, re)
+		}
+		switch strings.TrimSpace(re.Row.Fields[statusCol]) {
 		case "Bound":
-			c = StdColor
+			return StdColor
 		case "Available":
-			c = tcell.ColorYellow
-		default:
-			c = ErrColor
+			return tcell.ColorYellow
 		}
 
-		return c
+		return DefaultColorer(ns, h, re)
 	}
-
 }
 
 // Header returns a header rbw.
-func (PersistentVolume) Header(string) HeaderRow {
-	return HeaderRow{
-		Header{Name: "NAME"},
-		Header{Name: "CAPACITY"},
-		Header{Name: "ACCESS MODES"},
-		Header{Name: "RECLAIM POLICY"},
-		Header{Name: "STATUS"},
-		Header{Name: "CLAIM"},
-		Header{Name: "STORAGECLASS"},
-		Header{Name: "REASON"},
-		Header{Name: "AGE", Decorator: AgeDecorator},
+func (PersistentVolume) Header(string) Header {
+	return Header{
+		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "CAPACITY"},
+		HeaderColumn{Name: "ACCESS MODES"},
+		HeaderColumn{Name: "RECLAIM POLICY"},
+		HeaderColumn{Name: "STATUS"},
+		HeaderColumn{Name: "CLAIM"},
+		HeaderColumn{Name: "STORAGECLASS"},
+		HeaderColumn{Name: "REASON"},
+		HeaderColumn{Name: "VOLUMEMODE", Wide: true},
+		HeaderColumn{Name: "LABELS", Wide: true},
+		HeaderColumn{Name: "VALID", Wide: true},
+		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
 	}
 }
 
@@ -67,7 +73,7 @@ func (p PersistentVolume) Render(o interface{}, ns string, r *Row) error {
 
 	phase := pv.Status.Phase
 	if pv.ObjectMeta.DeletionTimestamp != nil {
-		phase = "Terminating"
+		phase = "Terminated"
 	}
 	var claim string
 	if pv.Spec.ClaimRef != nil {
@@ -86,14 +92,32 @@ func (p PersistentVolume) Render(o interface{}, ns string, r *Row) error {
 		size.String(),
 		accessMode(pv.Spec.AccessModes),
 		string(pv.Spec.PersistentVolumeReclaimPolicy),
-		string(phase),
+		string(pv.Status.Phase),
 		claim,
 		class,
 		pv.Status.Reason,
+		p.volumeMode(pv.Spec.VolumeMode),
+		mapToStr(pv.Labels),
+		asStatus(p.diagnose(phase)),
 		toAge(pv.ObjectMeta.CreationTimestamp),
 	}
 
 	return nil
+}
+
+func (PersistentVolume) diagnose(phase v1.PersistentVolumePhase) error {
+	if phase == v1.VolumeFailed {
+		return fmt.Errorf("failed to delete or recycle")
+	}
+	return nil
+}
+
+func (PersistentVolume) volumeMode(m *v1.PersistentVolumeMode) string {
+	if m == nil {
+		return MissingValue
+	}
+
+	return string(*m)
 }
 
 // ----------------------------------------------------------------------------

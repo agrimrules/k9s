@@ -44,12 +44,13 @@ func makeConn() *conn {
 
 func (c *conn) Config() *client.Config                            { return nil }
 func (c *conn) DialOrDie() kubernetes.Interface                   { return nil }
-func (c *conn) SwitchContextOrDie(ctx string)                     {}
+func (c *conn) SwitchContext(ctx string) error                    { return nil }
 func (c *conn) CachedDiscoveryOrDie() *disk.CachedDiscoveryClient { return nil }
 func (c *conn) RestConfigOrDie() *restclient.Config               { return nil }
 func (c *conn) MXDial() (*versioned.Clientset, error)             { return nil, nil }
 func (c *conn) DynDialOrDie() dynamic.Interface                   { return nil }
 func (c *conn) HasMetrics() bool                                  { return false }
+func (c *conn) CheckConnectivity() bool                           { return false }
 func (c *conn) IsNamespaced(n string) bool                        { return false }
 func (c *conn) SupportsResource(group string) bool                { return false }
 func (c *conn) ValidNamespaces() ([]v1.Namespace, error)          { return nil, nil }
@@ -59,6 +60,9 @@ func (c *conn) SupportsRes(grp string, versions []string) (string, bool, error) 
 func (c *conn) ServerVersion() (*version.Info, error)             { return nil, nil }
 func (c *conn) CurrentNamespaceName() (string, error)             { return "", nil }
 func (c *conn) CanI(ns, gvr string, verbs []string) (bool, error) { return true, nil }
+func (c *conn) ActiveCluster() string                             { return "" }
+func (c *conn) ActiveNamespace() string                           { return "" }
+func (c *conn) IsActiveNamespace(string) bool                     { return false }
 
 type podFactory struct{}
 

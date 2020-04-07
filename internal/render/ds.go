@@ -3,11 +3,9 @@ package render
 import (
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -17,41 +15,24 @@ import (
 type DaemonSet struct{}
 
 // ColorerFunc colors a resource row.
-func (DaemonSet) ColorerFunc() ColorerFunc {
-	return func(ns string, r RowEvent) tcell.Color {
-		c := DefaultColorer(ns, r)
-		if r.Kind == EventAdd || r.Kind == EventUpdate {
-			return c
-		}
-
-		desiredCol := 2
-		if !client.IsAllNamespaces(ns) {
-			desiredCol = 1
-		}
-		if strings.TrimSpace(r.Row.Fields[desiredCol]) != strings.TrimSpace(r.Row.Fields[desiredCol+2]) {
-			return ErrColor
-		}
-
-		return StdColor
-	}
+func (d DaemonSet) ColorerFunc() ColorerFunc {
+	return DefaultColorer
 }
 
 // Header returns a header row.
-func (DaemonSet) Header(ns string) HeaderRow {
-	var h HeaderRow
-	if client.IsAllNamespaces(ns) {
-		h = append(h, Header{Name: "NAMESPACE"})
+func (DaemonSet) Header(ns string) Header {
+	return Header{
+		HeaderColumn{Name: "NAMESPACE"},
+		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "DESIRED", Align: tview.AlignRight},
+		HeaderColumn{Name: "CURRENT", Align: tview.AlignRight},
+		HeaderColumn{Name: "READY", Align: tview.AlignRight},
+		HeaderColumn{Name: "UP-TO-DATE", Align: tview.AlignRight},
+		HeaderColumn{Name: "AVAILABLE", Align: tview.AlignRight},
+		HeaderColumn{Name: "LABELS", Wide: true},
+		HeaderColumn{Name: "VALID", Wide: true},
+		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
 	}
-
-	return append(h,
-		Header{Name: "NAME"},
-		Header{Name: "DESIRED", Align: tview.AlignRight},
-		Header{Name: "CURRENT", Align: tview.AlignRight},
-		Header{Name: "READY", Align: tview.AlignRight},
-		Header{Name: "UP-TO-DATE", Align: tview.AlignRight},
-		Header{Name: "AVAILABLE", Align: tview.AlignRight},
-		Header{Name: "AGE", Decorator: AgeDecorator},
-	)
 }
 
 // Render renders a K8s resource to screen.
@@ -67,19 +48,26 @@ func (d DaemonSet) Render(o interface{}, ns string, r *Row) error {
 	}
 
 	r.ID = client.MetaFQN(ds.ObjectMeta)
-	r.Fields = make(Fields, 0, len(d.Header(ns)))
-	if client.IsAllNamespaces(ns) {
-		r.Fields = append(r.Fields, ds.Namespace)
-	}
-	r.Fields = append(r.Fields,
+	r.Fields = Fields{
+		ds.Namespace,
 		ds.Name,
 		strconv.Itoa(int(ds.Status.DesiredNumberScheduled)),
 		strconv.Itoa(int(ds.Status.CurrentNumberScheduled)),
 		strconv.Itoa(int(ds.Status.NumberReady)),
 		strconv.Itoa(int(ds.Status.UpdatedNumberScheduled)),
 		strconv.Itoa(int(ds.Status.NumberAvailable)),
+		mapToStr(ds.Labels),
+		asStatus(d.diagnose(ds.Status.DesiredNumberScheduled, ds.Status.NumberReady)),
 		toAge(ds.ObjectMeta.CreationTimestamp),
-	)
+	}
 
+	return nil
+}
+
+// Happy returns true if resoure is happy, false otherwise
+func (DaemonSet) diagnose(d, r int32) error {
+	if d != r {
+		return fmt.Errorf("desiring %d replicas but %d ready", d, r)
+	}
 	return nil
 }

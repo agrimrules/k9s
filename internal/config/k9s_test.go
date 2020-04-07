@@ -22,8 +22,8 @@ func TestK9sValidate(t *testing.T) {
 	c.Validate(mc, mk)
 
 	assert.Equal(t, 2, c.RefreshRate)
-	assert.Equal(t, 1000, c.LogBufferSize)
-	assert.Equal(t, 200, c.LogRequestSize)
+	assert.Equal(t, int64(100), c.Logger.TailCount)
+	assert.Equal(t, 5000, c.Logger.BufferSize)
 	assert.Equal(t, "ctx1", c.CurrentContext)
 	assert.Equal(t, "c1", c.CurrentCluster)
 	assert.Equal(t, 1, len(c.Clusters))
@@ -45,8 +45,8 @@ func TestK9sValidateBlank(t *testing.T) {
 	c.Validate(mc, mk)
 
 	assert.Equal(t, 2, c.RefreshRate)
-	assert.Equal(t, 1000, c.LogBufferSize)
-	assert.Equal(t, 200, c.LogRequestSize)
+	assert.Equal(t, int64(100), c.Logger.TailCount)
+	assert.Equal(t, 5000, c.Logger.BufferSize)
 	assert.Equal(t, "ctx1", c.CurrentContext)
 	assert.Equal(t, "c1", c.CurrentCluster)
 	assert.Equal(t, 1, len(c.Clusters))
@@ -72,7 +72,7 @@ func TestK9sActiveClusterBlank(t *testing.T) {
 func TestK9sActiveCluster(t *testing.T) {
 	mk := NewMockKubeSettings()
 	cfg := config.NewConfig(mk)
-	assert.Nil(t, cfg.Load("test_assets/k9s.yml"))
+	assert.Nil(t, cfg.Load("testdata/k9s.yml"))
 
 	cl := cfg.K9s.ActiveCluster()
 	assert.NotNil(t, cl)

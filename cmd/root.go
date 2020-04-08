@@ -39,7 +39,7 @@ var (
 )
 
 func init() {
-	rootCmd.AddCommand(versionCmd(), infoCmd())
+	rootCmd.AddCommand(versionCmd(), infoCmd(), upgradeCmd())
 	initTransientFlags()
 	initK9sFlags()
 	initK8sFlags()

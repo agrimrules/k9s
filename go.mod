@@ -3,6 +3,7 @@ module github.com/derailed/k9s
 go 1.13
 
 require (
+	github.com/Masterminds/semver v1.5.0
 	github.com/atotto/clipboard v0.1.2
 	github.com/derailed/popeye v0.8.1
 	github.com/derailed/tview v0.3.10
@@ -11,6 +12,7 @@ require (
 	github.com/fsnotify/fsnotify v1.4.7
 	github.com/gdamore/tcell v1.3.0
 	github.com/ghodss/yaml v1.0.0
+	github.com/google/go-github/v30 v30.1.0
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mattn/go-runewidth v0.0.9
 	github.com/openfaas/faas v0.0.0-20200207215241-6afae214e3ec
@@ -33,7 +35,6 @@ require (
 	k8s.io/klog v1.0.0
 	k8s.io/kubectl v0.18.0
 	k8s.io/metrics v0.18.0
-	rsc.io/letsencrypt v0.0.3 // indirect
 	sigs.k8s.io/yaml v1.2.0
 	vbom.ml/util v0.0.0-20180919145318-efcd4e0f9787
 )

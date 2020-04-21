@@ -39,21 +39,24 @@ func upgradeCmd() *cobra.Command {
 		Short: "Upgrades k9s",
 		Long:  "Upgrades k9s to the latest available version",
 		Run: func(cmd *cobra.Command, args []string) {
-			doupgrade, id, artifactName, checksumArtifactID := upgradeNeeded()
+			doupgrade, id, artifactName, checksumArtifactID, remoteVersion := upgradeNeeded()
 			if doupgrade {
+				log.Info().Msgf("Upgrade required %v", doupgrade)
 				downloadArifact(id, artifactName)
 				downloadArifact(checksumArtifactID, "checksums.txt")
 				if validateChecksums(artifactName) {
 					f, _ := os.Open(artifactName)
+					defer f.Close()
 					extractTarGz(f)
+					fmt.Println(fmt.Sprintf("Successfully upgraded from %s --> %s", version, remoteVersion))
 				}
-				log.Info().Msgf("Upgrade required %v", doupgrade)
+				cleanup(artifactName)
 			}
 		},
 	}
 }
 
-func upgradeNeeded() (bool, int64, string, int64) {
+func upgradeNeeded() (bool, int64, string, int64, string) {
 	const fmat = "%-25s %s\n"
 	localSemver, err := semver.NewVersion(version)
 	if err != nil {
@@ -69,9 +72,9 @@ func upgradeNeeded() (bool, int64, string, int64) {
 	printTuple(fmat, "remoteVersion", remoteVersion, -1)
 	printTuple(fmat, "installed version", localSemver.String(), -1)
 	if remoteSemver.GreaterThan(localSemver) {
-		return true, artifacts[k9sRelease], k9sRelease, artifacts["checksums.txt"]
+		return true, artifacts[k9sRelease], k9sRelease, artifacts["checksums.txt"], remoteVersion
 	}
-	return false, 0, "", 0
+	return false, 0, "", 0, ""
 }
 
 func getLatestRemoteVersion() (string, map[string]int64) {
@@ -90,11 +93,11 @@ func getLatestRemoteVersion() (string, map[string]int64) {
 func downloadArifact(id int64, fileName string) {
 	data, _, _ := ghclient.Repositories.DownloadReleaseAsset(context.Background(), "derailed", "k9s", id, http.DefaultClient)
 	outFile, _ := os.Create(fileName)
-	defer outFile.Close()
 	_, err := io.Copy(outFile, data)
 	if err != nil {
 		log.Error().Err(err).Msgf("Couldnt download artifact %v", err)
 	}
+	defer outFile.Close()
 }
 
 func validateChecksums(k9sRelease string) bool {
@@ -104,7 +107,7 @@ func validateChecksums(k9sRelease string) bool {
 	s := bufio.NewScanner(cf)
 	for s.Scan() {
 		z := strings.Fields(s.Text())
-		md5sums[z[0]] = z[1]
+		md5sums[z[1]] = z[0]
 	}
 
 	f, _ := os.Open(k9sRelease)
@@ -118,13 +121,29 @@ func validateChecksums(k9sRelease string) bool {
 
 }
 
+func cleanup(k9sRelease string){
+	base, _ := os.Getwd()
+	fmt.Println(fmt.Sprintf("%s/checksums.txt",base))
+	_ = os.Remove(fmt.Sprintf("%s/checksums.txt",base))
+	err := os.Remove(fmt.Sprintf("%s/%s",base,k9sRelease))
+	if err != nil {
+		log.Error().Err(err).Msgf("Couldn't delete file %s", err)
+	}
+}
+
+
 func extractTarGz(gzipStream io.Reader) {
-	uncompressedStream, err := gzip.NewReader(gzipStream)
+	f, _ = os.Open(zipName)
+	defer f.Close()
+	// uncompressedStream, err := gzip.NewReader(gzipStream)
+	uncompressedStream, err := gzip.NewReader(f)
 	if err != nil {
 		log.Error().Err(err).Msgf("ExtractTarGz: NewReader failed")
 	}
 
 	tarReader := tar.NewReader(uncompressedStream)
+	
+	defer uncompressedStream.Close()
 
 	for true {
 		header, err := tarReader.Next()

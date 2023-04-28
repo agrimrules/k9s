@@ -1,16 +1,17 @@
 package config
 
 import (
-	"io/ioutil"
+	"fmt"
+	"os"
 	"path/filepath"
 
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
 	"gopkg.in/yaml.v2"
 )
 
 // K9sStylesFile represents K9s skins file location.
-var K9sStylesFile = filepath.Join(K9sHome, "skin.yml")
+var K9sStylesFile = filepath.Join(K9sHome(), "skin.yml")
 
 // StyleListener represents a skin's listener.
 type StyleListener interface {
@@ -33,17 +34,52 @@ type (
 
 	// Style tracks K9s styles.
 	Style struct {
-		Body  Body  `yaml:"body"`
-		Frame Frame `yaml:"frame"`
-		Info  Info  `yaml:"info"`
-		Views Views `yaml:"views"`
+		Body   Body   `yaml:"body"`
+		Prompt Prompt `yaml:"prompt"`
+		Help   Help   `yaml:"help"`
+		Frame  Frame  `yaml:"frame"`
+		Info   Info   `yaml:"info"`
+		Views  Views  `yaml:"views"`
+		Dialog Dialog `yaml:"dialog"`
+	}
+
+	// Prompt tracks command styles
+	Prompt struct {
+		FgColor      Color `yaml:"fgColor"`
+		BgColor      Color `yaml:"bgColor"`
+		SuggestColor Color `yaml:"suggestColor"`
+	}
+
+	// Help tracks help styles.
+	Help struct {
+		FgColor      Color `yaml:"fgColor"`
+		BgColor      Color `yaml:"bgColor"`
+		SectionColor Color `yaml:"sectionColor"`
+		KeyColor     Color `yaml:"keyColor"`
+		NumKeyColor  Color `yaml:"numKeyColor"`
 	}
 
 	// Body tracks body styles.
 	Body struct {
-		FgColor   Color `yaml:"fgColor"`
-		BgColor   Color `yaml:"bgColor"`
-		LogoColor Color `yaml:"logoColor"`
+		FgColor        Color `yaml:"fgColor"`
+		BgColor        Color `yaml:"bgColor"`
+		LogoColor      Color `yaml:"logoColor"`
+		LogoColorMsg   Color `yaml:"logoColorMsg"`
+		LogoColorInfo  Color `yaml:"logoColorInfo"`
+		LogoColorWarn  Color `yaml:"logoColorWarn"`
+		LogoColorError Color `yaml:"logoColorError"`
+	}
+
+	// Dialog tracks dialog styles.
+	Dialog struct {
+		FgColor            Color `yaml:"fgColor"`
+		BgColor            Color `yaml:"bgColor"`
+		ButtonFgColor      Color `yaml:"buttonFgColor"`
+		ButtonBgColor      Color `yaml:"buttonBgColor"`
+		ButtonFocusFgColor Color `yaml:"buttonFocusFgColor"`
+		ButtonFocusBgColor Color `yaml:"buttonFocusBgColor"`
+		LabelFgColor       Color `yaml:"labelFgColor"`
+		FieldFgColor       Color `yaml:"fieldFgColor"`
 	}
 
 	// Frame tracks frame styles.
@@ -69,6 +105,7 @@ type (
 		NewColor       Color `yaml:"newColor"`
 		ModifyColor    Color `yaml:"modifyColor"`
 		AddColor       Color `yaml:"addColor"`
+		PendingColor   Color `yaml:"pendingColor"`
 		ErrorColor     Color `yaml:"errorColor"`
 		HighlightColor Color `yaml:"highlightColor"`
 		KillColor      Color `yaml:"killColor"`
@@ -125,11 +162,12 @@ type (
 
 	// Table tracks table styles.
 	Table struct {
-		FgColor     Color       `yaml:"fgColor"`
-		BgColor     Color       `yaml:"bgColor"`
-		CursorColor Color       `yaml:"cursorColor"`
-		MarkColor   Color       `yaml:"markColor"`
-		Header      TableHeader `yaml:"header"`
+		FgColor       Color       `yaml:"fgColor"`
+		BgColor       Color       `yaml:"bgColor"`
+		CursorFgColor Color       `yaml:"cursorFgColor"`
+		CursorBgColor Color       `yaml:"cursorBgColor"`
+		MarkColor     Color       `yaml:"markColor"`
+		Header        TableHeader `yaml:"header"`
 	}
 
 	// TableHeader tracks table header styles.
@@ -141,10 +179,11 @@ type (
 
 	// Xray tracks xray styles.
 	Xray struct {
-		FgColor      Color `yaml:"fgColor"`
-		BgColor      Color `yaml:"bgColor"`
-		CursorColor  Color `yaml:"cursorColor"`
-		GraphicColor Color `yaml:"graphicColor"`
+		FgColor         Color `yaml:"fgColor"`
+		BgColor         Color `yaml:"bgColor"`
+		CursorColor     Color `yaml:"cursorColor"`
+		CursorTextColor Color `yaml:"cursorTextColor"`
+		GraphicColor    Color `yaml:"graphicColor"`
 	}
 
 	// Menu tracks menu styles.
@@ -180,7 +219,22 @@ func NewColor(c string) Color {
 
 // String returns color as string.
 func (c Color) String() string {
-	return string(c)
+	if c.isHex() {
+		return string(c)
+	}
+	if c == DefaultColor {
+		return "-"
+	}
+	col := c.Color().TrueColor().Hex()
+	if col < 0 {
+		return "-"
+	}
+
+	return fmt.Sprintf("#%06x", col)
+}
+
+func (c Color) isHex() bool {
+	return len(c) == 7 && c[0] == '#'
 }
 
 // Color returns a view color.
@@ -188,10 +242,8 @@ func (c Color) Color() tcell.Color {
 	if c == DefaultColor {
 		return tcell.ColorDefault
 	}
-	if color, ok := tcell.ColorNames[c.String()]; ok {
-		return color
-	}
-	return tcell.GetColor(c.String())
+
+	return tcell.GetColor(string(c)).TrueColor()
 }
 
 // Colors converts series string colors to colors.
@@ -205,18 +257,42 @@ func (c Colors) Colors() []tcell.Color {
 
 func newStyle() Style {
 	return Style{
-		Body:  newBody(),
-		Frame: newFrame(),
-		Info:  newInfo(),
-		Views: newViews(),
+		Body:   newBody(),
+		Prompt: newPrompt(),
+		Help:   newHelp(),
+		Frame:  newFrame(),
+		Info:   newInfo(),
+		Views:  newViews(),
+		Dialog: newDialog(),
+	}
+}
+
+func newDialog() Dialog {
+	return Dialog{
+		FgColor:            "cadetblue",
+		BgColor:            "black",
+		ButtonBgColor:      "darkslateblue",
+		ButtonFgColor:      "black",
+		ButtonFocusBgColor: "dodgerblue",
+		ButtonFocusFgColor: "black",
+		LabelFgColor:       "white",
+		FieldFgColor:       "white",
+	}
+}
+
+func newPrompt() Prompt {
+	return Prompt{
+		FgColor:      "cadetblue",
+		BgColor:      "black",
+		SuggestColor: "dodgerblue",
 	}
 }
 
 func newCharts() Charts {
 	return Charts{
-		BgColor:            "default",
-		DialBgColor:        "default",
-		ChartBgColor:       "default",
+		BgColor:            "black",
+		DialBgColor:        "black",
+		ChartBgColor:       "black",
 		DefaultDialColors:  Colors{Color("palegreen"), Color("orangered")},
 		DefaultChartColors: Colors{Color("palegreen"), Color("orangered")},
 		ResourceColors: map[string]Colors{
@@ -225,6 +301,7 @@ func newCharts() Charts {
 		},
 	}
 }
+
 func newViews() Views {
 	return Views{
 		Table:  newTable(),
@@ -245,11 +322,25 @@ func newFrame() Frame {
 	}
 }
 
+func newHelp() Help {
+	return Help{
+		FgColor:      "cadetblue",
+		BgColor:      "black",
+		SectionColor: "green",
+		KeyColor:     "dodgerblue",
+		NumKeyColor:  "fuchsia",
+	}
+}
+
 func newBody() Body {
 	return Body{
-		FgColor:   "cadetblue",
-		BgColor:   "black",
-		LogoColor: "orange",
+		FgColor:        "cadetblue",
+		BgColor:        "black",
+		LogoColor:      "orange",
+		LogoColorMsg:   "white",
+		LogoColorInfo:  "green",
+		LogoColorWarn:  "mediumvioletred",
+		LogoColorError: "red",
 	}
 }
 
@@ -258,6 +349,7 @@ func newStatus() Status {
 		NewColor:       "lightskyblue",
 		ModifyColor:    "greenyellow",
 		AddColor:       "dodgerblue",
+		PendingColor:   "darkorange",
 		ErrorColor:     "orangered",
 		HighlightColor: "aqua",
 		KillColor:      "mediumpurple",
@@ -307,20 +399,22 @@ func newInfo() Info {
 
 func newXray() Xray {
 	return Xray{
-		FgColor:      "aqua",
-		BgColor:      "black",
-		CursorColor:  "whitesmoke",
-		GraphicColor: "floralwhite",
+		FgColor:         "aqua",
+		BgColor:         "black",
+		CursorColor:     "dodgerblue",
+		CursorTextColor: "black",
+		GraphicColor:    "cadetblue",
 	}
 }
 
 func newTable() Table {
 	return Table{
-		FgColor:     "aqua",
-		BgColor:     "black",
-		CursorColor: "aqua",
-		MarkColor:   "palegreen",
-		Header:      newTableHeader(),
+		FgColor:       "aqua",
+		BgColor:       "black",
+		CursorFgColor: "black",
+		CursorBgColor: "aqua",
+		MarkColor:     "palegreen",
+		Header:        newTableHeader(),
 	}
 }
 
@@ -367,7 +461,7 @@ func (s *Styles) Reset() {
 	s.K9s = newStyle()
 }
 
-// DefaultSkin loads the default skin
+// DefaultSkin loads the default skin.
 func (s *Styles) DefaultSkin() {
 	s.K9s = newStyle()
 }
@@ -387,7 +481,7 @@ func (s *Styles) AddListener(l StyleListener) {
 	s.listeners = append(s.listeners, l)
 }
 
-// RemoveListener unregister a listener.
+// RemoveListener removes a listener.
 func (s *Styles) RemoveListener(l StyleListener) {
 	victim := -1
 	for i, lis := range s.listeners {
@@ -433,6 +527,11 @@ func (s *Styles) Charts() Charts {
 	return s.K9s.Views.Charts
 }
 
+// Dialog returns dialog styles.
+func (s *Styles) Dialog() Dialog {
+	return s.K9s.Dialog
+}
+
 // Table returns table styles.
 func (s *Styles) Table() Table {
 	return s.K9s.Views.Table
@@ -448,9 +547,9 @@ func (s *Styles) Views() Views {
 	return s.K9s.Views
 }
 
-// Load K9s configuration from file
+// Load K9s configuration from file.
 func (s *Styles) Load(path string) error {
-	f, err := ioutil.ReadFile(path)
+	f, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
@@ -458,7 +557,7 @@ func (s *Styles) Load(path string) error {
 	if err := yaml.Unmarshal(f, s); err != nil {
 		return err
 	}
-	s.fireStylesChanged()
+	// s.fireStylesChanged()
 
 	return nil
 }
@@ -471,5 +570,12 @@ func (s *Styles) Update() {
 	tview.Styles.PrimaryTextColor = s.FgColor()
 	tview.Styles.BorderColor = s.K9s.Frame.Border.FgColor.Color()
 	tview.Styles.FocusColor = s.K9s.Frame.Border.FocusColor.Color()
+	tview.Styles.TitleColor = s.FgColor()
+	tview.Styles.GraphicsColor = s.FgColor()
+	tview.Styles.SecondaryTextColor = s.FgColor()
+	tview.Styles.TertiaryTextColor = s.FgColor()
+	tview.Styles.InverseTextColor = s.FgColor()
+	tview.Styles.ContrastSecondaryTextColor = s.FgColor()
+
 	s.fireStylesChanged()
 }

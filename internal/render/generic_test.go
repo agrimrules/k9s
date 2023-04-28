@@ -21,7 +21,7 @@ func TestGenericRender(t *testing.T) {
 		"withNS": {
 			ns:      "ns1",
 			table:   makeNSGeneric(),
-			eID:     "ns1/c1",
+			eID:     "ns1/fred",
 			eFields: render.Fields{"ns1", "c1", "c2", "c3"},
 			eHeader: render.Header{
 				render.HeaderColumn{Name: "NAMESPACE"},
@@ -33,7 +33,7 @@ func TestGenericRender(t *testing.T) {
 		"all": {
 			ns:      client.NamespaceAll,
 			table:   makeNSGeneric(),
-			eID:     "ns1/c1",
+			eID:     "ns1/fred",
 			eFields: render.Fields{"ns1", "c1", "c2", "c3"},
 			eHeader: render.Header{
 				render.HeaderColumn{Name: "NAMESPACE"},
@@ -45,7 +45,7 @@ func TestGenericRender(t *testing.T) {
 		"allNS": {
 			ns:      client.AllNamespaces,
 			table:   makeNSGeneric(),
-			eID:     "ns1/c1",
+			eID:     "ns1/fred",
 			eFields: render.Fields{"ns1", "c1", "c2", "c3"},
 			eHeader: render.Header{
 				render.HeaderColumn{Name: "NAMESPACE"},
@@ -57,10 +57,9 @@ func TestGenericRender(t *testing.T) {
 		"clusterWide": {
 			ns:      client.ClusterScope,
 			table:   makeNoNSGeneric(),
-			eID:     "-/c1",
-			eFields: render.Fields{"-", "c1", "c2", "c3"},
+			eID:     "-/fred",
+			eFields: render.Fields{"c1", "c2", "c3"},
 			eHeader: render.Header{
-				render.HeaderColumn{Name: "NAMESPACE"},
 				render.HeaderColumn{Name: "A"},
 				render.HeaderColumn{Name: "B"},
 				render.HeaderColumn{Name: "C"},
@@ -69,10 +68,9 @@ func TestGenericRender(t *testing.T) {
 		"age": {
 			ns:      client.ClusterScope,
 			table:   makeAgeGeneric(),
-			eID:     "-/c1",
-			eFields: render.Fields{"-", "c1", "c2", "Age"},
+			eID:     "-/fred",
+			eFields: render.Fields{"c1", "c2", "2d"},
 			eHeader: render.Header{
-				render.HeaderColumn{Name: "NAMESPACE"},
 				render.HeaderColumn{Name: "A"},
 				render.HeaderColumn{Name: "C"},
 				render.HeaderColumn{Name: "AGE", Time: true},
@@ -85,7 +83,7 @@ func TestGenericRender(t *testing.T) {
 		u := uu[k]
 		t.Run(k, func(t *testing.T) {
 			var r render.Row
-			re.SetTable(u.table)
+			re.SetTable(u.ns, u.table)
 
 			assert.Equal(t, u.eHeader, re.Header(u.ns))
 			assert.Nil(t, re.Render(u.table.Rows[0], u.ns, &r))
@@ -172,7 +170,7 @@ func makeAgeGeneric() *metav1beta1.Table {
 				},
 				Cells: []interface{}{
 					"c1",
-					"Age",
+					"2d",
 					"c2",
 				},
 			},

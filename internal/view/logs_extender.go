@@ -2,24 +2,25 @@ package view
 
 import (
 	"github.com/derailed/k9s/internal/client"
+	"github.com/derailed/k9s/internal/dao"
 	"github.com/derailed/k9s/internal/ui"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 )
 
 // LogsExtender adds log actions to a given viewer.
 type LogsExtender struct {
 	ResourceViewer
 
-	containerFn ContainerFunc
+	optionsFn LogOptionsFunc
 }
 
 // NewLogsExtender returns a new extender.
-func NewLogsExtender(v ResourceViewer, f ContainerFunc) ResourceViewer {
+func NewLogsExtender(v ResourceViewer, f LogOptionsFunc) ResourceViewer {
 	l := LogsExtender{
 		ResourceViewer: v,
-		containerFn:    f,
+		optionsFn:      f,
 	}
-	l.bindKeys(l.Actions())
+	l.AddBindKeysFn(l.bindKeys)
 
 	return &l
 }
@@ -27,8 +28,8 @@ func NewLogsExtender(v ResourceViewer, f ContainerFunc) ResourceViewer {
 // BindKeys injects new menu actions.
 func (l *LogsExtender) bindKeys(aa ui.KeyActions) {
 	aa.Add(ui.KeyActions{
-		ui.KeyL:      ui.NewKeyAction("Logs", l.logsCmd(false), true),
-		ui.KeyShiftL: ui.NewKeyAction("Logs Previous", l.logsCmd(true), true),
+		ui.KeyL: ui.NewKeyAction("Logs", l.logsCmd(false), true),
+		ui.KeyP: ui.NewKeyAction("Logs Previous", l.logsCmd(true), true),
 	})
 }
 
@@ -59,12 +60,31 @@ func (l *LogsExtender) showLogs(path string, prev bool) {
 		l.App().Flash().Err(err)
 		return
 	}
-
-	co := ""
-	if l.containerFn != nil {
-		co = l.containerFn()
+	opts := l.buildLogOpts(path, "", prev)
+	if l.optionsFn != nil {
+		if opts, err = l.optionsFn(prev); err != nil {
+			l.App().Flash().Err(err)
+			return
+		}
 	}
-	if err := l.App().inject(NewLog(l.GVR(), path, co, prev)); err != nil {
+	if err := l.App().inject(NewLog(l.GVR(), opts), false); err != nil {
 		l.App().Flash().Err(err)
 	}
+}
+
+// buildLogOpts(path, co, prev, false, config.DefaultLoggerTailCount),.
+func (l *LogsExtender) buildLogOpts(path, co string, prevLogs bool) *dao.LogOptions {
+	cfg := l.App().Config.K9s.Logger
+	opts := dao.LogOptions{
+		Path:          path,
+		Container:     co,
+		Lines:         int64(cfg.TailCount),
+		Previous:      prevLogs,
+		ShowTimestamp: cfg.ShowTime,
+	}
+	if opts.Container == "" {
+		opts.AllContainers = true
+	}
+
+	return &opts
 }

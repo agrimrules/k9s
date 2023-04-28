@@ -23,9 +23,22 @@ k9s:
     fgColor: *fg
     bgColor: *bg
     logoColor: *blue
+  prompt:
+    fgColor: *fg
+    bgColor: *bg
+    suggestColor: *cadet
   info:
     fgColor: *sky
     sectionColor: *steel
+  dialog:
+    fgColor: *fg
+    bgColor: *bg
+    buttonFgColor: *fg
+    buttonBgColor: *powder
+    buttonFocusFgColor: white
+    buttonFocusBgColor: *aqua
+    labelFgColor: *mslate
+    fieldFgColor: *fg
   frame:
     border:
       fgColor: *fg
@@ -44,7 +57,7 @@ k9s:
       modifyColor: *powder
       addColor: *sky
       errorColor: *err
-      highlightcolor: *royal
+      highlightColor: *royal
       killColor: *slate
       completedColor: *gray
     title:
@@ -57,7 +70,8 @@ k9s:
     table:
       fgColor: *fg
       bgColor: *bg
-      cursorColor: *aqua
+      cursorFgColor: *fg
+      cursorBgColor: *aqua
       markColor: *mslate
       header:
         fgColor: *fg

@@ -5,14 +5,14 @@ import (
 	"path"
 	"strings"
 
+	"github.com/fvbommel/sortorder"
 	"github.com/rs/zerolog/log"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"vbom.ml/util/sortorder"
 )
 
 // GVR represents a kubernetes resource schema as a string.
-// Format is group/version/resources:subresource
+// Format is group/version/resources:subresource.
 type GVR struct {
 	raw, g, v, r, sr string
 }
@@ -54,6 +54,11 @@ func NewGVRFromMeta(a metav1.APIResource) GVR {
 // FromGVAndR builds a gvr from a group/version and resource.
 func FromGVAndR(gv, r string) GVR {
 	return NewGVR(path.Join(gv, r))
+}
+
+// FQN returns a fully qualified resource name.
+func (g GVR) FQN(n string) string {
+	return path.Join(g.AsResourceName(), n)
 }
 
 // AsResourceName returns a resource . separated descriptor in the shape of kind.version.group.

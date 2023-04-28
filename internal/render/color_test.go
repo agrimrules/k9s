@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/derailed/k9s/internal/render"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 	"github.com/stretchr/testify/assert"
 )
 

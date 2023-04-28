@@ -1,19 +1,19 @@
 package cmd
 
 import (
-	"flag"
 	"fmt"
+	"os"
 	"runtime/debug"
 
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/color"
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/view"
+	"github.com/mattn/go-colorable"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
-	"k8s.io/klog"
 )
 
 const (
@@ -25,74 +25,72 @@ const (
 var _ config.KubeSettings = (*client.Config)(nil)
 
 var (
-	version, commit, date = "dev", "dev", "n/a"
+	version, commit, date = "dev", "dev", client.NA
 	k9sFlags              *config.Flags
 	k8sFlags              *genericclioptions.ConfigFlags
-	demoMode              = new(bool)
 
 	rootCmd = &cobra.Command{
 		Use:   appName,
 		Short: shortAppDesc,
 		Long:  longAppDesc,
-		Run:   run,
+		RunE:  run,
 	}
+
+	out = colorable.NewColorableStdout()
 )
 
 func init() {
 	rootCmd.AddCommand(versionCmd(), infoCmd())
-	initTransientFlags()
 	initK9sFlags()
 	initK8sFlags()
-
-	// Klogs (of course) want to print stuff to the screen ;(
-	klog.InitFlags(nil)
-	if err := flag.Set("log_file", "/dev/null"); err != nil {
-		log.Error().Err(err)
-	}
-	if err := flag.Set("stderrthreshold", "fatal"); err != nil {
-		log.Error().Err(err)
-	}
-	if err := flag.Set("alsologtostderr", "false"); err != nil {
-		log.Error().Err(err)
-	}
-	if err := flag.Set("logtostderr", "false"); err != nil {
-		log.Error().Err(err)
-	}
 }
 
-// Execute root command
+// Execute root command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		log.Panic().Err(err)
 	}
 }
 
-func run(cmd *cobra.Command, args []string) {
+func run(cmd *cobra.Command, args []string) error {
+	if err := config.EnsureDirPath(*k9sFlags.LogFile, config.DefaultDirMod); err != nil {
+		return err
+	}
+	mod := os.O_CREATE | os.O_APPEND | os.O_WRONLY
+	file, err := os.OpenFile(*k9sFlags.LogFile, mod, config.DefaultFileMod)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if file != nil {
+			_ = file.Close()
+		}
+	}()
 	defer func() {
 		if err := recover(); err != nil {
 			log.Error().Msgf("Boom! %v", err)
 			log.Error().Msg(string(debug.Stack()))
 			printLogo(color.Red)
 			fmt.Printf("%s", color.Colorize("Boom!! ", color.Red))
-			fmt.Println(color.Colorize(fmt.Sprintf("%v.", err), color.LightGray))
+			fmt.Printf("%v.\n", err)
 		}
 	}()
 
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: file})
+
 	zerolog.SetGlobalLevel(parseLevel(*k9sFlags.LogLevel))
-	cfg := loadConfiguration()
-	app := view.NewApp(cfg)
-	{
-		defer app.BailOut()
-		if err := app.Init(version, *k9sFlags.RefreshRate); err != nil {
-			panic(err)
-		}
-		if err := app.Run(); err != nil {
-			panic(err)
-		}
-		if view.ExitStatus != "" {
-			panic(view.ExitStatus)
-		}
+	app := view.NewApp(loadConfiguration())
+	if err := app.Init(version, *k9sFlags.RefreshRate); err != nil {
+		return err
 	}
+	if err := app.Run(); err != nil {
+		return err
+	}
+	if view.ExitStatus != "" {
+		return fmt.Errorf("view exit status %s", view.ExitStatus)
+	}
+
+	return nil
 }
 
 func loadConfiguration() *config.Config {
@@ -106,38 +104,33 @@ func loadConfiguration() *config.Config {
 		log.Warn().Msg("Unable to locate K9s config. Generating new configuration...")
 	}
 
-	log.Debug().Msgf("DEMO MODE %#v", demoMode)
-	if demoMode != nil {
-		k9sCfg.SetDemoMode(*demoMode)
-	}
 	if *k9sFlags.RefreshRate != config.DefaultRefreshRate {
 		k9sCfg.K9s.OverrideRefreshRate(*k9sFlags.RefreshRate)
 	}
 
-	if k9sFlags.Headless != nil {
-		k9sCfg.K9s.OverrideHeadless(*k9sFlags.Headless)
-	}
+	k9sCfg.K9s.OverrideHeadless(*k9sFlags.Headless)
+	k9sCfg.K9s.OverrideLogoless(*k9sFlags.Logoless)
+	k9sCfg.K9s.OverrideCrumbsless(*k9sFlags.Crumbsless)
+	k9sCfg.K9s.OverrideReadOnly(*k9sFlags.ReadOnly)
+	k9sCfg.K9s.OverrideWrite(*k9sFlags.Write)
+	k9sCfg.K9s.OverrideCommand(*k9sFlags.Command)
+	k9sCfg.K9s.OverrideScreenDumpDir(*k9sFlags.ScreenDumpDir)
 
-	if k9sFlags.ReadOnly != nil {
-		k9sCfg.K9s.OverrideReadOnly(*k9sFlags.ReadOnly)
+	if err := k9sCfg.Refine(k8sFlags, k9sFlags, k8sCfg); err != nil {
+		log.Error().Err(err).Msgf("refine failed")
 	}
-
-	if k9sFlags.Command != nil {
-		k9sCfg.K9s.OverrideCommand(*k9sFlags.Command)
+	conn, err := client.InitConnection(k8sCfg)
+	k9sCfg.SetConnection(conn)
+	if err != nil {
+		log.Error().Err(err).Msgf("failed to connect to cluster %q", k9sCfg.K9s.CurrentContext)
+		return k9sCfg
 	}
-
-	if isBoolSet(k9sFlags.AllNamespaces) && k9sCfg.SetActiveNamespace(client.AllNamespaces) != nil {
-		log.Error().Msg("Setting active namespace")
-	}
-
-	if err := k9sCfg.Refine(k8sFlags); err != nil {
-		log.Panic().Err(err)
-	}
-	k9sCfg.SetConnection(client.InitConnectionOrDie(k8sCfg))
-
 	// Try to access server version if that fail. Connectivity issue?
 	if !k9sCfg.GetConnection().CheckConnectivity() {
-		log.Panic().Msgf("K9s can't connect to cluster")
+		log.Panic().Msgf("Cannot connect to cluster %s", k9sCfg.K9s.CurrentCluster)
+	}
+	if !k9sCfg.GetConnection().ConnectionOK() {
+		panic("No connectivity")
 	}
 	log.Info().Msg("✅ Kubernetes connectivity")
 	if err := k9sCfg.Save(); err != nil {
@@ -147,12 +140,10 @@ func loadConfiguration() *config.Config {
 	return k9sCfg
 }
 
-func isBoolSet(b *bool) bool {
-	return b != nil && *b
-}
-
 func parseLevel(level string) zerolog.Level {
 	switch level {
+	case "trace":
+		return zerolog.TraceLevel
 	case "debug":
 		return zerolog.DebugLevel
 	case "warn":
@@ -164,15 +155,6 @@ func parseLevel(level string) zerolog.Level {
 	default:
 		return zerolog.InfoLevel
 	}
-}
-
-func initTransientFlags() {
-	rootCmd.Flags().BoolVar(
-		demoMode,
-		"demo",
-		false,
-		"Enable demo mode to show keyboard commands",
-	)
 }
 
 func initK9sFlags() {
@@ -187,13 +169,31 @@ func initK9sFlags() {
 		k9sFlags.LogLevel,
 		"logLevel", "l",
 		config.DefaultLogLevel,
-		"Specify a log level (info, warn, debug, error, fatal, panic, trace)",
+		"Specify a log level (info, warn, debug, trace, error)",
+	)
+	rootCmd.Flags().StringVarP(
+		k9sFlags.LogFile,
+		"logFile", "",
+		config.DefaultLogFile,
+		"Specify the log file",
 	)
 	rootCmd.Flags().BoolVar(
 		k9sFlags.Headless,
 		"headless",
 		false,
 		"Turn K9s header off",
+	)
+	rootCmd.Flags().BoolVar(
+		k9sFlags.Logoless,
+		"logoless",
+		false,
+		"Turn K9s logo off",
+	)
+	rootCmd.Flags().BoolVar(
+		k9sFlags.Crumbsless,
+		"crumbsless",
+		false,
+		"Turn K9s crumbs off",
 	)
 	rootCmd.Flags().BoolVarP(
 		k9sFlags.AllNamespaces,
@@ -205,18 +205,31 @@ func initK9sFlags() {
 		k9sFlags.Command,
 		"command", "c",
 		config.DefaultCommand,
-		"Specify the default command to view when the application launches",
+		"Overrides the default resource to load when the application launches",
 	)
 	rootCmd.Flags().BoolVar(
 		k9sFlags.ReadOnly,
 		"readonly",
 		false,
-		"Disable all commands that modify the cluster",
+		"Sets readOnly mode by overriding readOnly configuration setting",
 	)
+	rootCmd.Flags().BoolVar(
+		k9sFlags.Write,
+		"write",
+		false,
+		"Sets write mode by overriding the readOnly configuration setting",
+	)
+	rootCmd.Flags().StringVar(
+		k9sFlags.ScreenDumpDir,
+		"screen-dump-dir",
+		"",
+		"Sets a path to a dir for a screen dumps",
+	)
+	rootCmd.Flags()
 }
 
 func initK8sFlags() {
-	k8sFlags = genericclioptions.NewConfigFlags(false)
+	k8sFlags = genericclioptions.NewConfigFlags(client.UsePersistentConfig)
 
 	rootCmd.Flags().StringVar(
 		k8sFlags.KubeConfig,

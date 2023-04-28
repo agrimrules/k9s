@@ -1,11 +1,14 @@
 package ui
 
 import (
+	"os"
+	"sync"
+
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/model"
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
 	"github.com/rs/zerolog/log"
 )
 
@@ -14,11 +17,13 @@ type App struct {
 	*tview.Application
 	Configurator
 
-	Main     *Pages
-	flash    *model.Flash
-	actions  KeyActions
-	views    map[string]tview.Primitive
-	cmdModel *model.FishBuff
+	Main    *Pages
+	flash   *model.Flash
+	actions KeyActions
+	views   map[string]tview.Primitive
+	cmdBuff *model.FishBuff
+	running bool
+	mx      sync.RWMutex
 }
 
 // NewApp returns a new app.
@@ -29,14 +34,14 @@ func NewApp(cfg *config.Config, context string) *App {
 		Configurator: Configurator{Config: cfg},
 		Main:         NewPages(),
 		flash:        model.NewFlash(model.DefaultFlashDelay),
-		cmdModel:     model.NewFishBuff(':', model.CommandBuffer),
+		cmdBuff:      model.NewFishBuff(':', model.CommandBuffer),
 	}
 	a.ReloadStyles(context)
 
 	a.views = map[string]tview.Primitive{
 		"menu":   NewMenu(a.Styles),
 		"logo":   NewLogo(a.Styles),
-		"prompt": NewPrompt(a.Config.K9s.NoIcons, a.Styles),
+		"prompt": NewPrompt(&a, a.Config.K9s.NoIcons, a.Styles),
 		"crumbs": NewCrumbs(a.Styles),
 	}
 
@@ -46,15 +51,52 @@ func NewApp(cfg *config.Config, context string) *App {
 // Init initializes the application.
 func (a *App) Init() {
 	a.bindKeys()
-	a.Prompt().SetModel(a.cmdModel)
-	a.cmdModel.AddListener(a)
+	a.Prompt().SetModel(a.cmdBuff)
+	a.cmdBuff.AddListener(a)
 	a.Styles.AddListener(a)
 
-	a.SetRoot(a.Main, true)
+	a.SetRoot(a.Main, true).EnableMouse(a.Config.K9s.EnableMouse)
 }
 
+// QueueUpdate queues up a ui action.
+func (a *App) QueueUpdate(f func()) {
+	if a.Application == nil {
+		return
+	}
+	go func() {
+		a.Application.QueueUpdate(f)
+	}()
+}
+
+// QueueUpdateDraw queues up a ui action and redraw the ui.
+func (a *App) QueueUpdateDraw(f func()) {
+	if a.Application == nil {
+		return
+	}
+	go func() {
+		a.Application.QueueUpdateDraw(f)
+	}()
+}
+
+// IsRunning checks if app is actually running.
+func (a *App) IsRunning() bool {
+	a.mx.RLock()
+	defer a.mx.RUnlock()
+	return a.running
+}
+
+// SetRunning sets the app run state.
+func (a *App) SetRunning(f bool) {
+	a.mx.Lock()
+	defer a.mx.Unlock()
+	a.running = f
+}
+
+// BufferCompleted indicates input was accepted.
+func (a *App) BufferCompleted(_, _ string) {}
+
 // BufferChanged indicates the buffer was changed.
-func (a *App) BufferChanged(s string) {}
+func (a *App) BufferChanged(_, _ string) {}
 
 // BufferActive indicates the buff activity changed.
 func (a *App) BufferActive(state bool, kind model.BufferKind) {
@@ -69,7 +111,6 @@ func (a *App) BufferActive(state bool, kind model.BufferKind) {
 		flex.RemoveItemAtIndex(1)
 		a.SetFocus(flex)
 	}
-	a.Draw()
 }
 
 // SuggestionChanged notifies of update to command suggestions.
@@ -110,9 +151,10 @@ func (a *App) bindKeys() {
 	}
 }
 
-// BailOut exists the application.
+// BailOut exits the application.
 func (a *App) BailOut() {
 	a.Stop()
+	os.Exit(0)
 }
 
 // ResetPrompt reset the prompt model and marks buffer as active.
@@ -124,35 +166,39 @@ func (a *App) ResetPrompt(m PromptModel) {
 
 // ResetCmd clear out user command.
 func (a *App) ResetCmd() {
-	a.cmdModel.Reset()
+	a.cmdBuff.Reset()
 }
 
 // ActivateCmd toggle command mode.
 func (a *App) ActivateCmd(b bool) {
-	a.cmdModel.SetActive(b)
+	a.cmdBuff.SetActive(b)
 }
 
 // GetCmd retrieves user command.
 func (a *App) GetCmd() string {
-	return a.cmdModel.GetText()
+	return a.cmdBuff.GetText()
 }
 
-// CmdBuff returns a cmd buffer.
+// CmdBuff returns the app cmd model.
 func (a *App) CmdBuff() *model.FishBuff {
-	return a.cmdModel
+	return a.cmdBuff
 }
 
 // HasCmd check if cmd buffer is active and has a command.
 func (a *App) HasCmd() bool {
-	return a.cmdModel.IsActive() && !a.cmdModel.Empty()
+	return a.cmdBuff.IsActive() && !a.cmdBuff.Empty()
 }
 
 func (a *App) quitCmd(evt *tcell.EventKey) *tcell.EventKey {
 	if a.InCmdMode() {
 		return evt
 	}
-	a.BailOut()
 
+	if !a.Config.K9s.NoExitOnCtrlC {
+		a.BailOut()
+	}
+
+	// overwrite the default ctrl-c behavior of tview
 	return nil
 }
 
@@ -167,28 +213,28 @@ func (a *App) HasAction(key tcell.Key) (KeyAction, bool) {
 	return act, ok
 }
 
-// GetActions returns a collection of actiona.
+// GetActions returns a collection of actions.
 func (a *App) GetActions() KeyActions {
 	return a.actions
 }
 
-// AddActions returns the application actiona.
+// AddActions returns the application actions.
 func (a *App) AddActions(aa KeyActions) {
 	for k, v := range aa {
 		a.actions[k] = v
 	}
 }
 
-// Views return the application root viewa.
+// Views return the application root views.
 func (a *App) Views() map[string]tview.Primitive {
 	return a.views
 }
 
 func (a *App) clearCmd(evt *tcell.EventKey) *tcell.EventKey {
-	if !a.CmdBuff().IsActive() {
+	if !a.cmdBuff.IsActive() {
 		return evt
 	}
-	a.CmdBuff().ClearText()
+	a.cmdBuff.ClearText(true)
 
 	return nil
 }
@@ -197,21 +243,21 @@ func (a *App) activateCmd(evt *tcell.EventKey) *tcell.EventKey {
 	if a.InCmdMode() {
 		return evt
 	}
-	a.ResetPrompt(a.cmdModel)
-	a.cmdModel.ClearText()
+	a.ResetPrompt(a.cmdBuff)
+	a.cmdBuff.ClearText(true)
 
 	return nil
 }
 
 // RedrawCmd forces a redraw.
 func (a *App) redrawCmd(evt *tcell.EventKey) *tcell.EventKey {
-	a.Draw()
+	a.QueueUpdateDraw(func() {})
 	return evt
 }
 
 // View Accessors...
 
-// Crumbs return app crumba.
+// Crumbs return app crumbs.
 func (a *App) Crumbs() *Crumbs {
 	return a.views["crumbs"].(*Crumbs)
 }
@@ -239,7 +285,7 @@ func (a *App) Flash() *model.Flash {
 // ----------------------------------------------------------------------------
 // Helpers...
 
-// AsKey converts rune to keyboard key.,
+// AsKey converts rune to keyboard key.,.
 func AsKey(evt *tcell.EventKey) tcell.Key {
 	if evt.Key() != tcell.KeyRune {
 		return evt.Key()

@@ -47,7 +47,7 @@ func (readWriteCloser) Close() error {
 }
 
 // List returns a collection of aliases.
-func (p *Popeye) List(ctx context.Context, _ string) ([]runtime.Object, error) {
+func (p *Popeye) List(ctx context.Context, ns string) ([]runtime.Object, error) {
 	defer func(t time.Time) {
 		log.Debug().Msgf("Popeye -- Elapsed %v", time.Since(t))
 		if err := recover(); err != nil {
@@ -55,17 +55,19 @@ func (p *Popeye) List(ctx context.Context, _ string) ([]runtime.Object, error) {
 		}
 	}(time.Now())
 
-	flags := config.NewFlags()
-	js := "json"
+	flags, js := config.NewFlags(), "json"
 	flags.Output = &js
+	flags.ActiveNamespace = &ns
 
 	if report, ok := ctx.Value(internal.KeyPath).(string); ok && report != "" {
-		sections := []string{report}
+		ns, n := client.Namespaced(report)
+		sections := []string{n}
 		flags.Sections = &sections
+		flags.ActiveNamespace = &ns
 	}
-	spinach := filepath.Join(cfg.K9sHome, "spinach.yml")
-	if c, err := p.Factory.Client().Config().CurrentContextName(); err == nil {
-		spinach = filepath.Join(cfg.K9sHome, fmt.Sprintf("%s_spinach.yml", c))
+	spinach := filepath.Join(cfg.K9sHome(), "spinach.yml")
+	if c, err := p.GetFactory().Client().Config().CurrentContextName(); err == nil {
+		spinach = filepath.Join(cfg.K9sHome(), fmt.Sprintf("%s_spinach.yml", c))
 	}
 	if _, err := os.Stat(spinach); err == nil {
 		flags.Spinach = &spinach
@@ -75,15 +77,15 @@ func (p *Popeye) List(ctx context.Context, _ string) ([]runtime.Object, error) {
 	if err != nil {
 		return nil, err
 	}
-	popeye.SetFactory(newPopFactory(p.Factory))
+	popeye.SetFactory(newPopeyeFactory(p.Factory))
 	if err = popeye.Init(); err != nil {
 		return nil, err
 	}
 
 	buff := readWriteCloser{Buffer: bytes.NewBufferString("")}
 	popeye.SetOutputTarget(buff)
-	if err = popeye.Sanitize(); err != nil {
-		log.Debug().Msgf("BOOM %#v", *flags.Sections)
+	if _, _, err = popeye.Sanitize(); err != nil {
+		log.Error().Err(err).Msgf("BOOM %#v", *flags.Sections)
 		return nil, err
 	}
 
@@ -118,19 +120,20 @@ type popFactory struct {
 
 var _ types.Factory = (*popFactory)(nil)
 
-func newPopFactory(f Factory) *popFactory {
+func newPopeyeFactory(f Factory) *popFactory {
 	return &popFactory{Factory: f}
 }
+
 func (p *popFactory) Client() types.Connection {
-	return &popConnection{Connection: p.Factory.Client()}
+	return &popeyeConnection{Connection: p.Factory.Client()}
 }
 
-type popConnection struct {
+type popeyeConnection struct {
 	client.Connection
 }
 
-var _ types.Connection = (*popConnection)(nil)
+var _ types.Connection = (*popeyeConnection)(nil)
 
-func (c *popConnection) Config() types.Config {
+func (c *popeyeConnection) Config() types.Config {
 	return c.Connection.Config()
 }

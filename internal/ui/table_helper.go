@@ -37,8 +37,10 @@ const (
 )
 
 var (
-	// LableRx identifies a label query
-	LableRx = regexp.MustCompile(`\A\-l`)
+	// LabelRx identifies a label query.
+	LabelRx = regexp.MustCompile(`\A\-l`)
+
+	inverseRx = regexp.MustCompile(`\A\!`)
 
 	fuzzyRx = regexp.MustCompile(`\A\-f`)
 )
@@ -66,7 +68,7 @@ func IsLabelSelector(s string) bool {
 	if s == "" {
 		return false
 	}
-	return LableRx.MatchString(s)
+	return LabelRx.MatchString(s)
 }
 
 // IsFuzzySelector checks if query is fuzzy.
@@ -75,6 +77,14 @@ func IsFuzzySelector(s string) bool {
 		return false
 	}
 	return fuzzyRx.MatchString(s)
+}
+
+// IsInverseSelector checks if inverse char has been provided.
+func IsInverseSelector(s string) bool {
+	if s == "" {
+		return false
+	}
+	return inverseRx.MatchString(s)
 }
 
 // TrimLabelSelector extracts label query.
@@ -118,7 +128,7 @@ func formatCell(field string, padding int) string {
 	return field
 }
 
-func filterToast(data render.TableData) render.TableData {
+func filterToast(data *render.TableData) *render.TableData {
 	validX := data.Header.IndexOf("VALID", true)
 	if validX == -1 {
 		return data
@@ -134,13 +144,17 @@ func filterToast(data render.TableData) render.TableData {
 			toast.RowEvents = append(toast.RowEvents, re)
 		}
 	}
-	return toast
+
+	return &toast
 }
 
-func rxFilter(q string, data render.TableData) (render.TableData, error) {
-	rx, err := regexp.Compile(`(?i)` + q)
+func rxFilter(q string, inverse bool, data *render.TableData) (*render.TableData, error) {
+	if inverse {
+		q = q[1:]
+	}
+	rx, err := regexp.Compile(`(?i)(` + q + `)`)
 	if err != nil {
-		return data, err
+		return data, fmt.Errorf("%w -- %s", err, q)
 	}
 
 	filtered := render.TableData{
@@ -148,19 +162,29 @@ func rxFilter(q string, data render.TableData) (render.TableData, error) {
 		RowEvents: make(render.RowEvents, 0, len(data.RowEvents)),
 		Namespace: data.Namespace,
 	}
+	ageIndex := -1
+	if data.Header.HasAge() {
+		ageIndex = data.Header.IndexOf("AGE", true)
+	}
+	const spacer = " "
 	for _, re := range data.RowEvents {
-		fields := strings.Join(re.Row.Fields, " ")
-		if rx.MatchString(fields) {
+		ff := re.Row.Fields
+		if ageIndex > 0 {
+			ff = append(ff[0:ageIndex], ff[ageIndex+1:]...)
+		}
+		fields := strings.Join(ff, spacer)
+		if (inverse && !rx.MatchString(fields)) ||
+			((!inverse) && rx.MatchString(fields)) {
 			filtered.RowEvents = append(filtered.RowEvents, re)
 		}
 	}
 
-	return filtered, nil
+	return &filtered, nil
 }
 
-func fuzzyFilter(q string, data render.TableData) render.TableData {
+func fuzzyFilter(q string, data *render.TableData) *render.TableData {
 	q = strings.TrimSpace(q)
-	var ss []string
+	ss := make([]string, 0, len(data.RowEvents))
 	for _, re := range data.RowEvents {
 		ss = append(ss, re.Row.ID)
 	}
@@ -175,5 +199,5 @@ func fuzzyFilter(q string, data render.TableData) render.TableData {
 		filtered.RowEvents = append(filtered.RowEvents, data.RowEvents[m.Index])
 	}
 
-	return filtered
+	return &filtered
 }

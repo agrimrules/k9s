@@ -11,6 +11,7 @@ import (
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/render"
 	"github.com/rs/zerolog/log"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -24,37 +25,32 @@ type PortForward struct {
 	NonResource
 }
 
-// Delete a portforward.
-func (p *PortForward) Delete(path string, cascade, force bool) error {
-	ns, _ := client.Namespaced(path)
-	auth, err := p.Client().CanI(ns, "v1/pods:portforward", []string{client.DeleteVerb})
-	if err != nil {
-		return err
-	}
-	if !auth {
-		return fmt.Errorf("user is not authorized to delete port forward %s", path)
-	}
-
-	p.Factory.DeleteForwarder(path)
+// Delete deletes a portforward.
+func (p *PortForward) Delete(_ context.Context, path string, _ *metav1.DeletionPropagation, _ Grace) error {
+	p.GetFactory().DeleteForwarder(path)
 
 	return nil
 }
 
-// List returns a collection of screen dumps.
+// List returns a collection of port forwards.
 func (p *PortForward) List(ctx context.Context, _ string) ([]runtime.Object, error) {
 	benchFile, ok := ctx.Value(internal.KeyBenchCfg).(string)
 	if !ok {
 		return nil, fmt.Errorf("no bench file found in context")
 	}
+	path, _ := ctx.Value(internal.KeyPath).(string)
 
 	config, err := config.NewBench(benchFile)
 	if err != nil {
-		log.Debug().Msgf("No custom benchmark config file found")
+		log.Warn().Msgf("No custom benchmark config file found")
 	}
 
-	cc := config.Benchmarks.Containers
-	oo := make([]runtime.Object, 0, len(p.Factory.Forwarders()))
-	for k, f := range p.Factory.Forwarders() {
+	ff, cc := p.GetFactory().Forwarders(), config.Benchmarks.Containers
+	oo := make([]runtime.Object, 0, len(ff))
+	for k, f := range ff {
+		if !strings.HasPrefix(k, path) {
+			continue
+		}
 		cfg := render.BenchCfg{
 			C: config.Benchmarks.Defaults.C,
 			N: config.Benchmarks.Defaults.N,
@@ -77,9 +73,9 @@ func (p *PortForward) List(ctx context.Context, _ string) ([]runtime.Object, err
 
 var podNameRX = regexp.MustCompile(`\A(.+)\-(\w{10})\-(\w{5})\z`)
 
-// PodToKey converts a pod path to a generic bench config key
+// PodToKey converts a pod path to a generic bench config key.
 func PodToKey(path string) string {
-	tokens := strings.Split(path, ":")
+	tokens := strings.Split(path, "|")
 	ns, po := client.Namespaced(tokens[0])
 	sections := podNameRX.FindStringSubmatch(po)
 	if len(sections) >= 1 {

@@ -10,10 +10,10 @@ const (
 	// MaxLogThreshold sets the max value for log size.
 	MaxLogThreshold = 5000
 	// DefaultSinceSeconds tracks default log age.
-	DefaultSinceSeconds = -1 // all logs
+	DefaultSinceSeconds = 300 // all logs
 )
 
-// Logger tracks logger options
+// Logger tracks logger options.
 type Logger struct {
 	TailCount      int64 `yaml:"tail"`
 	BufferSize     int   `yaml:"buffer"`

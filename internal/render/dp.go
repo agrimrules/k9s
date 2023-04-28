@@ -12,7 +12,9 @@ import (
 )
 
 // Deployment renders a K8s Deployment to screen.
-type Deployment struct{}
+type Deployment struct {
+	Base
+}
 
 // ColorerFunc colors a resource row.
 func (d Deployment) ColorerFunc() ColorerFunc {
@@ -29,7 +31,7 @@ func (Deployment) Header(ns string) Header {
 		HeaderColumn{Name: "AVAILABLE", Align: tview.AlignRight},
 		HeaderColumn{Name: "LABELS", Wide: true},
 		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		HeaderColumn{Name: "AGE", Time: true},
 	}
 }
 
@@ -55,7 +57,7 @@ func (d Deployment) Render(o interface{}, ns string, r *Row) error {
 		strconv.Itoa(int(dp.Status.AvailableReplicas)),
 		mapToStr(dp.Labels),
 		asStatus(d.diagnose(dp.Status.Replicas, dp.Status.AvailableReplicas)),
-		toAge(dp.ObjectMeta.CreationTimestamp),
+		toAge(dp.GetCreationTimestamp()),
 	}
 
 	return nil

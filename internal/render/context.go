@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 	"github.com/rs/zerolog/log"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -12,15 +12,14 @@ import (
 )
 
 // Context renders a K8s ConfigMap to screen.
-type Context struct{}
+type Context struct {
+	Base
+}
 
 // ColorerFunc colors a resource row.
 func (Context) ColorerFunc() ColorerFunc {
 	return func(ns string, h Header, r RowEvent) tcell.Color {
 		c := DefaultColorer(ns, h, r)
-		if r.Kind == EventAdd || r.Kind == EventUpdate {
-			return c
-		}
 		if strings.Contains(strings.TrimSpace(r.Row.Fields[0]), "*") {
 			return HighlightColor
 		}

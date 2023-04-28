@@ -61,7 +61,7 @@ func NewThreshold() Threshold {
 	}
 }
 
-// Validate a namespace is setup correctly
+// Validate a namespace is setup correctly.
 func (t Threshold) Validate(c client.Connection, ks KubeSettings) {
 	for _, k := range []string{"cpu", "memory"} {
 		v, ok := t[k]
@@ -91,6 +91,7 @@ func (t Threshold) LevelFor(k string, v int) SeverityLevel {
 
 // SeverityColor returns an defcon level associated level.
 func (t *Threshold) SeverityColor(k string, v int) string {
+	// nolint:exhaustive
 	switch t.LevelFor(k, v) {
 	case SeverityHigh:
 		return "red"

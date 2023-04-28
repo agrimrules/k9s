@@ -1,55 +1,81 @@
 package dialog
 
 import (
+	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/ui"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-const deleteKey = "delete"
+const (
+	noDeletePropagation   = "None"
+	defaultPropagationIdx = 0
+)
 
 type (
-	okFunc     func(cascade, force bool)
+	okFunc     func(propagation *metav1.DeletionPropagation, force bool)
 	cancelFunc func()
 )
 
+var propagationOptions []string = []string{
+	string(metav1.DeletePropagationBackground),
+	string(metav1.DeletePropagationForeground),
+	string(metav1.DeletePropagationOrphan),
+	noDeletePropagation,
+}
+
 // ShowDelete pops a resource deletion dialog.
-func ShowDelete(pages *ui.Pages, msg string, ok okFunc, cancel cancelFunc) {
-	cascade, force := true, false
+func ShowDelete(styles config.Dialog, pages *ui.Pages, msg string, ok okFunc, cancel cancelFunc) {
+	propagation, force := "", false
 	f := tview.NewForm()
 	f.SetItemPadding(0)
 	f.SetButtonsAlign(tview.AlignCenter).
-		SetButtonBackgroundColor(tview.Styles.PrimitiveBackgroundColor).
-		SetButtonTextColor(tview.Styles.PrimaryTextColor).
-		SetLabelColor(tcell.ColorAqua).
-		SetFieldTextColor(tcell.ColorOrange)
-	f.AddCheckbox("Cascade:", cascade, func(checked bool) {
-		cascade = checked
+		SetButtonBackgroundColor(styles.ButtonBgColor.Color()).
+		SetButtonTextColor(styles.ButtonFgColor.Color()).
+		SetLabelColor(styles.LabelFgColor.Color()).
+		SetFieldTextColor(styles.FieldFgColor.Color())
+	f.AddDropDown("Propagation:", propagationOptions, defaultPropagationIdx, func(_ string, optionIndex int) {
+		propagation = propagationOptions[optionIndex]
 	})
-	f.AddCheckbox("Force:", force, func(checked bool) {
+	propField := f.GetFormItemByLabel("Propagation:").(*tview.DropDown)
+	propField.SetListStyles(
+		styles.FgColor.Color(), styles.BgColor.Color(),
+		styles.ButtonFocusFgColor.Color(), styles.ButtonFocusBgColor.Color(),
+	)
+	f.AddCheckbox("Force:", force, func(_ string, checked bool) {
 		force = checked
 	})
 	f.AddButton("Cancel", func() {
-		dismissDelete(pages)
+		dismiss(pages)
 		cancel()
 	})
 	f.AddButton("OK", func() {
-		ok(cascade, force)
-		dismissDelete(pages)
+		switch propagation {
+		case noDeletePropagation:
+			ok(nil, force)
+		default:
+			p := metav1.DeletionPropagation(propagation)
+			ok(&p, force)
+		}
+		dismiss(pages)
 		cancel()
 	})
+	for i := 0; i < 2; i++ {
+		b := f.GetButton(i)
+		if b == nil {
+			continue
+		}
+		b.SetBackgroundColorActivated(styles.ButtonFocusBgColor.Color())
+		b.SetLabelColorActivated(styles.ButtonFocusFgColor.Color())
+	}
 	f.SetFocus(2)
 
 	confirm := tview.NewModalForm("<Delete>", f)
 	confirm.SetText(msg)
 	confirm.SetDoneFunc(func(int, string) {
-		dismissDelete(pages)
+		dismiss(pages)
 		cancel()
 	})
-	pages.AddPage(deleteKey, confirm, false, false)
-	pages.ShowPage(deleteKey)
-}
-
-func dismissDelete(pages *ui.Pages) {
-	pages.RemovePage(deleteKey)
+	pages.AddPage(dialogKey, confirm, false, false)
+	pages.ShowPage(dialogKey)
 }

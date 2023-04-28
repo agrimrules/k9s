@@ -5,10 +5,9 @@ import (
 
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/dao"
-	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
 )
 
 // ReplicaSet presents a replicaset viewer.
@@ -21,9 +20,8 @@ func NewReplicaSet(gvr client.GVR) ResourceViewer {
 	r := ReplicaSet{
 		ResourceViewer: NewBrowser(gvr),
 	}
-	r.SetBindKeysFn(r.bindKeys)
+	r.AddBindKeysFn(r.bindKeys)
 	r.GetTable().SetEnterFn(r.showPods)
-	r.GetTable().SetColorerFn(render.ReplicaSet{}.ColorerFunc())
 
 	return &r
 }
@@ -79,8 +77,10 @@ func (r *ReplicaSet) dismissModal() {
 }
 
 func (r *ReplicaSet) showModal(msg string, done func(int, string)) {
+	styles := r.App().Styles.Dialog()
 	confirm := tview.NewModal().
 		AddButtons([]string{"Cancel", "OK"}).
+		SetButtonBackgroundColor(styles.ButtonBgColor.Color()).
 		SetTextColor(tcell.ColorFuchsia).
 		SetText(msg).
 		SetDoneFunc(done)

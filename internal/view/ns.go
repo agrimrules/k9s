@@ -1,13 +1,11 @@
 package view
 
 import (
-	"time"
-
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 	"github.com/rs/zerolog/log"
 )
 
@@ -21,30 +19,28 @@ type Namespace struct {
 	ResourceViewer
 }
 
-// NewNamespace returns a new viewer
+// NewNamespace returns a new viewer.
 func NewNamespace(gvr client.GVR) ResourceViewer {
 	n := Namespace{
 		ResourceViewer: NewBrowser(gvr),
 	}
 	n.GetTable().SetDecorateFn(n.decorate)
-	n.GetTable().SetColorerFn(render.Namespace{}.ColorerFunc())
 	n.GetTable().SetEnterFn(n.switchNs)
-	n.SetBindKeysFn(n.bindKeys)
+	n.AddBindKeysFn(n.bindKeys)
 
 	return &n
 }
 
 func (n *Namespace) bindKeys(aa ui.KeyActions) {
 	aa.Add(ui.KeyActions{
-		ui.KeyU: ui.NewKeyAction("Use", n.useNsCmd, true),
+		ui.KeyU:      ui.NewKeyAction("Use", n.useNsCmd, true),
+		ui.KeyShiftS: ui.NewKeyAction("Sort Status", n.GetTable().SortColCmd(statusCol, true), false),
 	})
 }
 
 func (n *Namespace) switchNs(app *App, model ui.Tabular, gvr, path string) {
 	n.useNamespace(path)
-	if err := app.gotoResource("pods", "", true); err != nil {
-		app.Flash().Err(err)
-	}
+	app.gotoResource("pods", "", false)
 }
 
 func (n *Namespace) useNsCmd(evt *tcell.EventKey) *tcell.EventKey {
@@ -59,21 +55,24 @@ func (n *Namespace) useNsCmd(evt *tcell.EventKey) *tcell.EventKey {
 
 func (n *Namespace) useNamespace(fqn string) {
 	_, ns := client.Namespaced(fqn)
-	log.Debug().Msgf("SWITCHING NS %q", ns)
-	n.App().switchNS(ns)
+	if err := n.App().switchNS(ns); err != nil {
+		n.App().Flash().Err(err)
+		return
+	}
 	if err := n.App().Config.SetActiveNamespace(ns); err != nil {
 		n.App().Flash().Err(err)
-	} else {
-		n.App().Flash().Infof("Namespace %s is now active!", ns)
+		return
 	}
+
+	n.App().Flash().Infof("Namespace %s is now active!", ns)
 	if err := n.App().Config.Save(); err != nil {
 		log.Error().Err(err).Msg("Config file save failed!")
 	}
 }
 
-func (n *Namespace) decorate(data render.TableData) render.TableData {
+func (n *Namespace) decorate(data *render.TableData) {
 	if n.App().Conn() == nil || len(data.RowEvents) == 0 {
-		return data
+		return
 	}
 
 	// checks if all ns is in the list if not add it.
@@ -83,7 +82,7 @@ func (n *Namespace) decorate(data render.TableData) render.TableData {
 				Kind: render.EventUnchanged,
 				Row: render.Row{
 					ID:     client.NamespaceAll,
-					Fields: render.Fields{client.NamespaceAll, "Active", "", "", time.Now().String()},
+					Fields: render.Fields{client.NamespaceAll, "Active", "", "", ""},
 				},
 			},
 		)
@@ -99,6 +98,4 @@ func (n *Namespace) decorate(data render.TableData) render.TableData {
 			re.Kind = render.EventUnchanged
 		}
 	}
-
-	return data
 }

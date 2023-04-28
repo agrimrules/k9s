@@ -4,7 +4,8 @@ import (
 	"fmt"
 
 	"github.com/derailed/k9s/internal/client"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
+	"github.com/rs/zerolog/log"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -24,7 +25,9 @@ func rbacVerbHeader() Header {
 }
 
 // Policy renders a rbac policy to screen.
-type Policy struct{}
+type Policy struct {
+	Base
+}
 
 // ColorerFunc colors a resource row.
 func (Policy) ColorerFunc() ColorerFunc {
@@ -71,6 +74,9 @@ func (Policy) Render(o interface{}, gvr string, r *Row) error {
 // Helpers...
 
 func cleanseResource(r string) string {
+	if r == "" {
+		return r
+	}
 	if r[0] == '/' {
 		return r
 	}
@@ -78,7 +84,7 @@ func cleanseResource(r string) string {
 	return n
 }
 
-// PolicyRes represents a rback policy rule.
+// PolicyRes represents a rbac policy rule.
 type PolicyRes struct {
 	Namespace, Binding string
 	Resource, Group    string
@@ -98,6 +104,35 @@ func NewPolicyRes(ns, binding, res, grp string, vv []string) PolicyRes {
 	}
 }
 
+// GR returns the group/resource path.
+func (p PolicyRes) GR() string {
+	return p.Group + "/" + p.Resource
+}
+
+func (p PolicyRes) Merge(p1 PolicyRes) (PolicyRes, error) {
+	if p.GR() != p1.GR() {
+		return PolicyRes{}, fmt.Errorf("policy mismatch %s vs %s", p.GR(), p1.GR())
+	}
+
+	for _, v := range p1.Verbs {
+		if !p.hasVerb(v) {
+			p.Verbs = append(p.Verbs, v)
+		}
+	}
+
+	return p, nil
+}
+
+func (p PolicyRes) hasVerb(v1 string) bool {
+	for _, v := range p.Verbs {
+		if v == v1 {
+			return true
+		}
+	}
+
+	return false
+}
+
 // GetObjectKind returns a schema object.
 func (p PolicyRes) GetObjectKind() schema.ObjectKind {
 	return nil
@@ -113,19 +148,24 @@ type Policies []PolicyRes
 
 // Upsert adds a new policy.
 func (pp Policies) Upsert(p PolicyRes) Policies {
-	idx, ok := pp.find(p.Resource)
+	idx, ok := pp.find(p.GR())
 	if !ok {
 		return append(pp, p)
+	}
+	p, err := pp[idx].Merge(p)
+	if err != nil {
+		log.Error().Err(err).Msg("policy upsert failed")
+		return pp
 	}
 	pp[idx] = p
 
 	return pp
 }
 
-// Find locates a row by id. Retturns false is not found.
-func (pp Policies) find(res string) (int, bool) {
+// Find locates a row by id. Returns false is not found.
+func (pp Policies) find(gr string) (int, bool) {
 	for i, p := range pp {
-		if p.Resource == res {
+		if p.GR() == gr {
 			return i, true
 		}
 	}

@@ -6,9 +6,8 @@ import (
 
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
-	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 )
 
 const aliasTitle = "Aliases"
@@ -23,21 +22,21 @@ func NewAlias(gvr client.GVR) ResourceViewer {
 	a := Alias{
 		ResourceViewer: NewBrowser(gvr),
 	}
-	a.GetTable().SetColorerFn(render.Alias{}.ColorerFunc())
-	a.GetTable().SetBorderFocusColor(tcell.ColorMediumSpringGreen)
-	a.GetTable().SetSelectedStyle(tcell.ColorWhite, tcell.ColorMediumSpringGreen, tcell.AttrNone)
-	a.SetBindKeysFn(a.bindKeys)
+	a.GetTable().SetBorderFocusColor(tcell.ColorAliceBlue)
+	a.GetTable().SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorAliceBlue).Attributes(tcell.AttrNone))
+	a.AddBindKeysFn(a.bindKeys)
 	a.SetContextFn(a.aliasContext)
 
 	return &a
 }
 
-// Init initialiazes the view.
+// Init initializes the view.
 func (a *Alias) Init(ctx context.Context) error {
 	if err := a.ResourceViewer.Init(ctx); err != nil {
 		return err
 	}
-	a.GetTable().GetModel().SetNamespace("*")
+	a.GetTable().GetModel().SetNamespace(client.NotNamespaced)
+
 	return nil
 }
 
@@ -57,18 +56,17 @@ func (a *Alias) bindKeys(aa ui.KeyActions) {
 }
 
 func (a *Alias) gotoCmd(evt *tcell.EventKey) *tcell.EventKey {
+	if a.GetTable().CmdBuff().IsActive() {
+		return a.GetTable().activateCmd(evt)
+	}
+
 	r, _ := a.GetTable().GetSelection()
 	if r != 0 {
 		s := ui.TrimCell(a.GetTable().SelectTable, r, 1)
 		tokens := strings.Split(s, ",")
-		if err := a.App().gotoResource(tokens[0], "", true); err != nil {
-			a.App().Flash().Err(err)
-		}
+		a.App().gotoResource(tokens[0], "", true)
 		return nil
 	}
 
-	if a.GetTable().CmdBuff().IsActive() {
-		return a.GetTable().activateCmd(evt)
-	}
 	return evt
 }

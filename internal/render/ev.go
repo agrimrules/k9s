@@ -1,33 +1,28 @@
 package render
 
 import (
-	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/derailed/k9s/internal/client"
-	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
-	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
+	"github.com/derailed/tcell/v2"
+	metav1beta1 "k8s.io/apimachinery/pkg/apis/meta/v1beta1"
 )
 
 // Event renders a K8s Event to screen.
-type Event struct{}
+type Event struct {
+	Generic
+}
+
+func (*Event) IsGeneric() bool {
+	return true
+}
 
 // ColorerFunc colors a resource row.
-func (e Event) ColorerFunc() ColorerFunc {
+func (e *Event) ColorerFunc() ColorerFunc {
 	return func(ns string, h Header, re RowEvent) tcell.Color {
-		if !Happy(ns, h, re.Row) {
-			return ErrColor
-		}
 		reasonCol := h.IndexOf("REASON", true)
-		if reasonCol == -1 {
-			return DefaultColorer(ns, h, re)
-		}
-		if strings.TrimSpace(re.Row.Fields[reasonCol]) == "Killing" {
+		if reasonCol >= 0 && strings.TrimSpace(re.Row.Fields[reasonCol]) == "Killing" {
 			return KillColor
 		}
 
@@ -35,59 +30,71 @@ func (e Event) ColorerFunc() ColorerFunc {
 	}
 }
 
-// Header returns a header rbw.
-func (Event) Header(ns string) Header {
-	return Header{
-		HeaderColumn{Name: "NAMESPACE"},
-		HeaderColumn{Name: "NAME"},
-		HeaderColumn{Name: "TYPE"},
-		HeaderColumn{Name: "REASON"},
-		HeaderColumn{Name: "SOURCE"},
-		HeaderColumn{Name: "COUNT", Align: tview.AlignRight},
-		HeaderColumn{Name: "MESSAGE", Wide: true},
-		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+var ageCols = map[string]struct{}{
+	"FIRST SEEN": {},
+	"LAST SEEN":  {},
+}
+
+var wideCols = map[string]struct{}{
+	"SUBOBJECT":  {},
+	"SOURCE":     {},
+	"FIRST SEEN": {},
+	"NAME":       {},
+	"MESSAGE":    {},
+}
+
+func (e *Event) Header(ns string) Header {
+	if e.table == nil {
+		return Header{}
 	}
+	hh := make(Header, 0, len(e.table.ColumnDefinitions))
+	hh = append(hh, HeaderColumn{Name: "NAMESPACE"})
+	for _, h := range e.table.ColumnDefinitions {
+		header := HeaderColumn{Name: strings.ToUpper(h.Name)}
+		if _, ok := ageCols[header.Name]; ok {
+			header.Time = true
+		}
+		if _, ok := wideCols[header.Name]; ok {
+			header.Wide = true
+		}
+		hh = append(hh, header)
+	}
+
+	return hh
 }
 
 // Render renders a K8s resource to screen.
-func (e Event) Render(o interface{}, ns string, r *Row) error {
-	raw, ok := o.(*unstructured.Unstructured)
+func (e *Event) Render(o interface{}, ns string, r *Row) error {
+	row, ok := o.(metav1beta1.TableRow)
 	if !ok {
-		return fmt.Errorf("Expected Event, but got %T", o)
+		return fmt.Errorf("expecting a TableRow but got %T", o)
 	}
-	var ev v1.Event
-	err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Object, &ev)
+	nns, name, err := resourceNS(row.Object.Raw)
 	if err != nil {
 		return err
 	}
 
-	r.ID = client.MetaFQN(ev.ObjectMeta)
-	r.Fields = Fields{
-		ev.Namespace,
-		asRef(ev.InvolvedObject),
-		ev.Type,
-		ev.Reason,
-		ev.Source.Component,
-		strconv.Itoa(int(ev.Count)),
-		ev.Message,
-		asStatus(e.diagnose(ev.Type)),
-		toAge(ev.LastTimestamp),
+	if !ok {
+		return fmt.Errorf("expecting row 0 to be a string but got %T", row.Cells[0])
+	}
+	r.ID = client.FQN(nns, name)
+	r.Fields = make(Fields, 0, len(e.Header(ns)))
+	r.Fields = append(r.Fields, nns)
+	for _, o := range row.Cells {
+		if o == nil {
+			r.Fields = append(r.Fields, Blank)
+			continue
+		}
+		if s, ok := o.(fmt.Stringer); ok {
+			r.Fields = append(r.Fields, s.String())
+			continue
+		}
+		if s, ok := o.(string); ok {
+			r.Fields = append(r.Fields, s)
+			continue
+		}
+		r.Fields = append(r.Fields, fmt.Sprintf("%v", o))
 	}
 
 	return nil
-}
-
-// Happy returns true if resoure is happy, false otherwise
-func (Event) diagnose(kind string) error {
-	if kind != "Normal" {
-		return errors.New("failed event")
-	}
-	return nil
-}
-
-// Helpers...
-
-func asRef(r v1.ObjectReference) string {
-	return strings.ToLower(r.Kind) + ":" + r.Name
 }

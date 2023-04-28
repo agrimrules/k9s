@@ -14,8 +14,9 @@ const (
 
 // Namespace tracks active and favorites namespaces.
 type Namespace struct {
-	Active    string   `yaml:"active"`
-	Favorites []string `yaml:"favorites"`
+	Active        string   `yaml:"active"`
+	LockFavorites bool     `yaml:"lockFavorites"`
+	Favorites     []string `yaml:"favorites"`
 }
 
 // NewNamespace create a new namespace configuration.
@@ -26,13 +27,16 @@ func NewNamespace() *Namespace {
 	}
 }
 
-// Validate a namespace is setup correctly
+// Validate a namespace is setup correctly.
 func (n *Namespace) Validate(c client.Connection, ks KubeSettings) {
+	if c == nil {
+		return
+	}
 	nns, err := c.ValidNamespaces()
 	if err != nil {
 		return
 	}
-	nn := ks.NamespaceNames(nns)
+	nn := client.NamespaceNames(nns)
 	if !n.isAllNamespaces() && !InList(nn, n.Active) {
 		log.Error().Msgf("[Config] Validation error active namespace %q does not exists", n.Active)
 	}
@@ -47,11 +51,14 @@ func (n *Namespace) Validate(c client.Connection, ks KubeSettings) {
 
 // SetActive set the active namespace.
 func (n *Namespace) SetActive(ns string, ks KubeSettings) error {
-	log.Debug().Msgf("Setting active ns %q", ns)
+	if ns == client.NotNamespaced {
+		ns = client.AllNamespaces
+	}
 	n.Active = ns
-	if ns != "" {
+	if ns != "" && !n.LockFavorites {
 		n.addFavNS(ns)
 	}
+
 	return nil
 }
 

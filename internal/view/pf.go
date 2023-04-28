@@ -3,6 +3,7 @@ package view
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/derailed/k9s/internal"
@@ -10,10 +11,9 @@ import (
 	"github.com/derailed/k9s/internal/dao"
 	"github.com/derailed/k9s/internal/model"
 	"github.com/derailed/k9s/internal/perf"
-	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
 	"github.com/rs/zerolog/log"
 )
 
@@ -32,11 +32,10 @@ func NewPortForward(gvr client.GVR) ResourceViewer {
 		ResourceViewer: NewBrowser(gvr),
 	}
 	p.GetTable().SetBorderFocusColor(tcell.ColorDodgerBlue)
-	p.GetTable().SetSelectedStyle(tcell.ColorWhite, tcell.ColorDodgerBlue, tcell.AttrNone)
-	p.GetTable().SetColorerFn(render.PortForward{}.ColorerFunc())
+	p.GetTable().SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorDodgerBlue).Attributes(tcell.AttrNone))
 	p.GetTable().SetSortCol(ageCol, true)
 	p.SetContextFn(p.portForwardContext)
-	p.SetBindKeysFn(p.bindKeys)
+	p.AddBindKeysFn(p.bindKeys)
 
 	return &p
 }
@@ -56,11 +55,23 @@ func (p *PortForward) bindKeys(aa ui.KeyActions) {
 }
 
 func (p *PortForward) showBenchCmd(evt *tcell.EventKey) *tcell.EventKey {
-	if err := p.App().inject(NewBenchmark(client.NewGVR("benchmarks"))); err != nil {
+	b := NewBenchmark(client.NewGVR("benchmarks"))
+	b.SetContextFn(p.getContext)
+	if err := p.App().inject(b, false); err != nil {
 		p.App().Flash().Err(err)
 	}
 
 	return nil
+}
+
+func (p *PortForward) getContext(ctx context.Context) context.Context {
+	ctx = context.WithValue(ctx, internal.KeyDir, benchDir(p.App().Config))
+	path := p.GetTable().GetSelectedItem()
+	if path == "" {
+		return ctx
+	}
+
+	return context.WithValue(ctx, internal.KeyPath, path)
 }
 
 func (p *PortForward) toggleBenchCmd(evt *tcell.EventKey) *tcell.EventKey {
@@ -79,7 +90,12 @@ func (p *PortForward) toggleBenchCmd(evt *tcell.EventKey) *tcell.EventKey {
 	cfg.Name = path
 
 	r, _ := p.GetTable().GetSelection()
-	base := ui.TrimCell(p.GetTable().SelectTable, r, 4)
+	log.Debug().Msgf("PF NS %q", p.GetTable().GetModel().GetNamespace())
+	col := 3
+	if client.IsAllNamespaces(p.GetTable().GetModel().GetNamespace()) {
+		col = 4
+	}
+	base := ui.TrimCell(p.GetTable().SelectTable, r, col)
 	var err error
 	p.bench, err = perf.NewBenchmark(base, p.App().version, cfg)
 	if err != nil {
@@ -121,19 +137,35 @@ func (p *PortForward) deleteCmd(evt *tcell.EventKey) *tcell.EventKey {
 		return nil
 	}
 
-	path := p.GetTable().GetSelectedItem()
-	if path == "" {
-		return nil
+	selections := p.GetTable().GetSelectedItems()
+	if len(selections) == 0 {
+		return evt
 	}
 
-	showModal(p.App().Content.Pages, fmt.Sprintf("Delete PortForward `%s?", path), func() {
-		var pf dao.PortForward
-		pf.Init(p.App().factory, client.NewGVR("portforwards"))
-		if err := pf.Delete(path, true, true); err != nil {
+	p.Stop()
+	defer p.Start()
+	var msg string
+	if len(selections) > 1 {
+		msg = fmt.Sprintf("Delete %d marked %s?", len(selections), p.GVR())
+	} else {
+		h, err := pfToHuman(selections[0])
+		if err == nil {
+			msg = fmt.Sprintf("Delete %s %s?", p.GVR().R(), h)
+		} else {
 			p.App().Flash().Err(err)
-			return
+			return nil
 		}
-		p.App().Flash().Infof("PortForward %s deleted!", path)
+	}
+	showModal(p.App(), msg, func() {
+		for _, s := range selections {
+			var pf dao.PortForward
+			pf.Init(p.App().factory, client.NewGVR("portforwards"))
+			if err := pf.Delete(context.Background(), s, nil, dao.DefaultGrace); err != nil {
+				p.App().Flash().Err(err)
+				return
+			}
+		}
+		p.App().Flash().Infof("Successfully deleted %d PortForward!", len(selections))
 		p.GetTable().Refresh()
 	})
 
@@ -143,9 +175,23 @@ func (p *PortForward) deleteCmd(evt *tcell.EventKey) *tcell.EventKey {
 // ----------------------------------------------------------------------------
 // Helpers...
 
-func showModal(p *ui.Pages, msg string, ok func()) {
+var selRx = regexp.MustCompile(`\A([\w-]+)/([\w-]+)\|([\w-]+)?\|(\d+):(\d+)`)
+
+func pfToHuman(s string) (string, error) {
+	mm := selRx.FindStringSubmatch(s)
+	if len(mm) < 6 {
+		return "", fmt.Errorf("Unable to parse selection %s", s)
+	}
+
+	return fmt.Sprintf("%s::%s %s->%s", mm[2], mm[3], mm[4], mm[5]), nil
+}
+
+func showModal(a *App, msg string, ok func()) {
+	p := a.Content.Pages
+	styles := a.Styles.Dialog()
 	m := tview.NewModal().
 		AddButtons([]string{"Cancel", "OK"}).
+		SetButtonBackgroundColor(styles.ButtonBgColor.Color()).
 		SetTextColor(tcell.ColorFuchsia).
 		SetText(msg).
 		SetDoneFunc(func(_ int, b string) {

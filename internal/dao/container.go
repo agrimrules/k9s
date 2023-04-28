@@ -7,7 +7,6 @@ import (
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/render"
-	"github.com/rs/zerolog/log"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -33,13 +32,11 @@ func (c *Container) List(ctx context.Context, _ string) ([]runtime.Object, error
 	}
 
 	var (
-		pmx *mv1beta1.PodMetrics
+		cmx client.ContainersMetrics
 		err error
 	)
 	if withMx, ok := ctx.Value(internal.KeyWithMetrics).(bool); withMx || !ok {
-		if pmx, err = client.DialMetrics(c.Client()).FetchPodMetrics(ctx, fqn); err != nil {
-			log.Warn().Err(err).Msgf("No metrics found for pod %q", fqn)
-		}
+		cmx, _ = client.DialMetrics(c.Client()).FetchContainersMetrics(ctx, fqn)
 	}
 
 	po, err := c.fetchPod(fqn)
@@ -48,52 +45,34 @@ func (c *Container) List(ctx context.Context, _ string) ([]runtime.Object, error
 	}
 	res := make([]runtime.Object, 0, len(po.Spec.InitContainers)+len(po.Spec.Containers))
 	for _, co := range po.Spec.InitContainers {
-		res = append(res, makeContainerRes(co, po, pmx, true))
+		res = append(res, makeContainerRes(co, po, cmx[co.Name], true))
 	}
 	for _, co := range po.Spec.Containers {
-		res = append(res, makeContainerRes(co, po, pmx, false))
+		res = append(res, makeContainerRes(co, po, cmx[co.Name], false))
 	}
 
 	return res, nil
 }
 
-// TailLogs tails a given container logs
-func (c *Container) TailLogs(ctx context.Context, logChan LogChan, opts LogOptions) error {
-	log.Debug().Msgf("CONTAINER-LOGS")
+// TailLogs tails a given container logs.
+func (c *Container) TailLogs(ctx context.Context, opts *LogOptions) ([]LogChan, error) {
 	po := Pod{}
 	po.Init(c.Factory, client.NewGVR("v1/pods"))
 
-	return po.TailLogs(ctx, logChan, opts)
+	return po.TailLogs(ctx, opts)
 }
 
 // ----------------------------------------------------------------------------
 // Helpers...
 
-func makeContainerRes(co v1.Container, po *v1.Pod, pmx *mv1beta1.PodMetrics, isInit bool) render.ContainerRes {
-	cmx, err := containerMetrics(co.Name, pmx)
-	if err != nil {
-		log.Warn().Err(err).Msgf("No container metrics found for %s::%s", po.Name, co.Name)
-	}
-
+func makeContainerRes(co v1.Container, po *v1.Pod, cmx *mv1beta1.ContainerMetrics, isInit bool) render.ContainerRes {
 	return render.ContainerRes{
 		Container: &co,
 		Status:    getContainerStatus(co.Name, po.Status),
 		MX:        cmx,
 		IsInit:    isInit,
-		Age:       po.ObjectMeta.CreationTimestamp,
+		Age:       po.GetCreationTimestamp(),
 	}
-}
-
-func containerMetrics(n string, pmx *mv1beta1.PodMetrics) (*mv1beta1.ContainerMetrics, error) {
-	if pmx == nil {
-		return nil, fmt.Errorf("no metrics for container %s", n)
-	}
-	for _, m := range pmx.Containers {
-		if m.Name == n {
-			return &m, nil
-		}
-	}
-	return nil, nil
 }
 
 func getContainerStatus(co string, status v1.PodStatus) *v1.ContainerStatus {
@@ -112,15 +91,11 @@ func getContainerStatus(co string, status v1.PodStatus) *v1.ContainerStatus {
 }
 
 func (c *Container) fetchPod(fqn string) (*v1.Pod, error) {
-	o, err := c.Factory.Get("v1/pods", fqn, false, labels.Everything())
+	o, err := c.GetFactory().Get("v1/pods", fqn, true, labels.Everything())
 	if err != nil {
 		return nil, err
 	}
 	var po v1.Pod
 	err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.(*unstructured.Unstructured).Object, &po)
-	if err != nil {
-		return nil, err
-	}
-
-	return &po, nil
+	return &po, err
 }

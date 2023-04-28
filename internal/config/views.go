@@ -1,14 +1,14 @@
 package config
 
 import (
-	"io/ioutil"
+	"os"
 	"path/filepath"
 
 	"gopkg.in/yaml.v2"
 )
 
 // K9sViewConfigFile represents the location for the views configuration.
-var K9sViewConfigFile = filepath.Join(K9sHome, "views.yml")
+var K9sViewConfigFile = filepath.Join(K9sHome(), "views.yml")
 
 // ViewConfigListener represents a view config listener.
 type ViewConfigListener interface {
@@ -18,7 +18,8 @@ type ViewConfigListener interface {
 
 // ViewSetting represents a view configuration.
 type ViewSetting struct {
-	Columns []string `yaml:"columns"`
+	Columns    []string `yaml:"columns"`
+	SortColumn string   `yaml:"sortColumn"`
 }
 
 // ViewSettings represent a collection of view configurations.
@@ -56,7 +57,7 @@ func (v *CustomView) Reset() {
 
 // Load loads view configurations.
 func (v *CustomView) Load(path string) error {
-	raw, err := ioutil.ReadFile(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
@@ -80,7 +81,6 @@ func (v *CustomView) AddListener(gvr string, l ViewConfigListener) {
 // RemoveListener unregister a listener.
 func (v *CustomView) RemoveListener(gvr string) {
 	delete(v.listeners, gvr)
-
 }
 
 func (v *CustomView) fireConfigChanged() {

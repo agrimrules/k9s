@@ -3,14 +3,14 @@ package view
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
-	"github.com/atotto/clipboard"
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/model"
 	"github.com/derailed/k9s/internal/ui"
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
 	"github.com/sahilm/fuzzy"
 )
 
@@ -18,29 +18,33 @@ const detailsTitleFmt = "[fg:bg:b] %s([hilite:bg:b]%s[fg:bg:-])[fg:bg:-] "
 
 // Details represents a generic text viewer.
 type Details struct {
-	*tview.TextView
+	*tview.Flex
 
+	text                      *tview.TextView
 	actions                   ui.KeyActions
 	app                       *App
 	title, subject            string
-	cmdBuff                   *model.CmdBuff
+	cmdBuff                   *model.FishBuff
 	model                     *model.Text
 	currentRegion, maxRegions int
 	searchable                bool
+	fullScreen                bool
 }
 
 // NewDetails returns a details viewer.
 func NewDetails(app *App, title, subject string, searchable bool) *Details {
 	d := Details{
-		TextView:   tview.NewTextView(),
+		Flex:       tview.NewFlex(),
+		text:       tview.NewTextView(),
 		app:        app,
 		title:      title,
 		subject:    subject,
 		actions:    make(ui.KeyActions),
-		cmdBuff:    model.NewCmdBuff('/', model.FilterBuffer),
+		cmdBuff:    model.NewFishBuff('/', model.FilterBuffer),
 		model:      model.NewText(),
 		searchable: searchable,
 	}
+	d.AddItem(d.text, 0, 1, true)
 
 	return &d
 }
@@ -50,15 +54,12 @@ func (d *Details) Init(_ context.Context) error {
 	if d.title != "" {
 		d.SetBorder(true)
 	}
-	d.SetScrollable(true).SetWrap(true).SetRegions(true)
-	d.SetDynamicColors(true)
-	d.SetHighlightColor(tcell.ColorOrange)
+	d.text.SetScrollable(true).SetWrap(true).SetRegions(true)
+	d.text.SetDynamicColors(true)
+	d.text.SetHighlightColor(tcell.ColorOrange)
 	d.SetTitleColor(tcell.ColorAqua)
 	d.SetInputCapture(d.keyboard)
 	d.SetBorderPadding(0, 0, 1, 1)
-	d.SetChangedFunc(func() {
-		d.app.Draw()
-	})
 	d.updateTitle()
 
 	d.app.Styles.AddListener(d)
@@ -74,10 +75,15 @@ func (d *Details) Init(_ context.Context) error {
 	return nil
 }
 
+// InCmdMode checks if prompt is active.
+func (d *Details) InCmdMode() bool {
+	return d.cmdBuff.InCmdMode()
+}
+
 // TextChanged notifies the model changed.
 func (d *Details) TextChanged(lines []string) {
-	d.SetText(colorizeYAML(d.app.Styles.Views().Yaml, strings.Join(lines, "\n")))
-	d.ScrollToBeginning()
+	d.text.SetText(colorizeYAML(d.app.Styles.Views().Yaml, strings.Join(lines, "\n")))
+	d.text.ScrollToBeginning()
 }
 
 // TextFiltered notifies when the filter changed.
@@ -92,17 +98,20 @@ func (d *Details) TextFiltered(lines []string, matches fuzzy.Matches) {
 		d.maxRegions++
 	}
 
-	d.SetText(colorizeYAML(d.app.Styles.Views().Yaml, strings.Join(ll, "\n")))
-	d.Highlight()
+	d.text.SetText(colorizeYAML(d.app.Styles.Views().Yaml, strings.Join(ll, "\n")))
+	d.text.Highlight()
 	if d.maxRegions > 0 {
-		d.Highlight("search_0")
-		d.ScrollToHighlight()
+		d.text.Highlight("search_0")
+		d.text.ScrollToHighlight()
 	}
 }
 
 // BufferChanged indicates the buffer was changed.
-func (d *Details) BufferChanged(s string) {
-	d.model.Filter(s)
+func (d *Details) BufferChanged(_, _ string) {}
+
+// BufferCompleted indicates input was accepted.
+func (d *Details) BufferCompleted(text, _ string) {
+	d.model.Filter(text)
 	d.updateTitle()
 }
 
@@ -116,7 +125,8 @@ func (d *Details) bindKeys() {
 		tcell.KeyEnter:  ui.NewSharedKeyAction("Filter", d.filterCmd, false),
 		tcell.KeyEscape: ui.NewKeyAction("Back", d.resetCmd, false),
 		tcell.KeyCtrlS:  ui.NewKeyAction("Save", d.saveCmd, false),
-		ui.KeyC:         ui.NewKeyAction("Copy", d.cpCmd, true),
+		ui.KeyC:         ui.NewKeyAction("Copy", cpCmd(d.app.Flash(), d.text), true),
+		ui.KeyF:         ui.NewKeyAction("Toggle FullScreen", d.toggleFullScreenCmd, true),
 		ui.KeyN:         ui.NewKeyAction("Next Match", d.nextCmd, true),
 		ui.KeyShiftN:    ui.NewKeyAction("Prev Match", d.prevCmd, true),
 		ui.KeySlash:     ui.NewSharedKeyAction("Filter Mode", d.activateCmd, false),
@@ -139,7 +149,7 @@ func (d *Details) keyboard(evt *tcell.EventKey) *tcell.EventKey {
 // StylesChanged notifies the skin changed.
 func (d *Details) StylesChanged(s *config.Styles) {
 	d.SetBackgroundColor(d.app.Styles.BgColor())
-	d.SetTextColor(d.app.Styles.FgColor())
+	d.text.SetTextColor(d.app.Styles.FgColor())
 	d.SetBorderFocusColor(d.app.Styles.Frame().Border.FocusColor.Color())
 	d.TextChanged(d.model.Peek())
 }
@@ -150,12 +160,16 @@ func (d *Details) Update(buff string) *Details {
 	return d
 }
 
+func (d *Details) GetWriter() io.Writer {
+	return d.text
+}
+
 // SetSubject updates the subject.
 func (d *Details) SetSubject(s string) {
 	d.subject = s
 }
 
-// Actions returns menu actions
+// Actions returns menu actions.
 func (d *Details) Actions() ui.KeyActions {
 	return d.actions
 }
@@ -190,9 +204,26 @@ func (d *Details) nextCmd(evt *tcell.EventKey) *tcell.EventKey {
 	if d.currentRegion >= d.maxRegions {
 		d.currentRegion = 0
 	}
-	d.Highlight(fmt.Sprintf("search_%d", d.currentRegion))
-	d.ScrollToHighlight()
+	d.text.Highlight(fmt.Sprintf("search_%d", d.currentRegion))
+	d.text.ScrollToHighlight()
 	d.updateTitle()
+
+	return nil
+}
+
+func (d *Details) toggleFullScreenCmd(evt *tcell.EventKey) *tcell.EventKey {
+	if d.app.InCmdMode() {
+		return evt
+	}
+
+	d.fullScreen = !d.fullScreen
+	d.SetFullScreen(d.fullScreen)
+	d.Box.SetBorder(!d.fullScreen)
+	if d.fullScreen {
+		d.Box.SetBorderPadding(0, 0, 0, 0)
+	} else {
+		d.Box.SetBorderPadding(0, 0, 1, 1)
+	}
 
 	return nil
 }
@@ -206,8 +237,8 @@ func (d *Details) prevCmd(evt *tcell.EventKey) *tcell.EventKey {
 	if d.currentRegion < 0 {
 		d.currentRegion = d.maxRegions - 1
 	}
-	d.Highlight(fmt.Sprintf("search_%d", d.currentRegion))
-	d.ScrollToHighlight()
+	d.text.Highlight(fmt.Sprintf("search_%d", d.currentRegion))
+	d.text.ScrollToHighlight()
 	d.updateTitle()
 
 	return nil
@@ -256,19 +287,10 @@ func (d *Details) resetCmd(evt *tcell.EventKey) *tcell.EventKey {
 }
 
 func (d *Details) saveCmd(evt *tcell.EventKey) *tcell.EventKey {
-	if path, err := saveYAML(d.app.Config.K9s.CurrentCluster, d.title, d.GetText(true)); err != nil {
+	if path, err := saveYAML(d.app.Config.K9s.GetScreenDumpDir(), d.app.Config.K9s.CurrentContextDir(), d.title, d.text.GetText(true)); err != nil {
 		d.app.Flash().Err(err)
 	} else {
 		d.app.Flash().Infof("Log %s saved successfully!", path)
-	}
-
-	return nil
-}
-
-func (d *Details) cpCmd(evt *tcell.EventKey) *tcell.EventKey {
-	d.app.Flash().Info("Content copied to clipboard...")
-	if err := clipboard.WriteAll(d.GetText(true)); err != nil {
-		d.app.Flash().Err(err)
 	}
 
 	return nil

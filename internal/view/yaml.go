@@ -60,14 +60,14 @@ func enableRegion(str string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(str, "<<<", "["), ">>>", "]")
 }
 
-func saveYAML(cluster, name, data string) (string, error) {
-	dir := filepath.Join(config.K9sDumpDir, cluster)
+func saveYAML(screenDumpDir, context, name, data string) (string, error) {
+	dir := filepath.Join(screenDumpDir, context)
 	if err := ensureDir(dir); err != nil {
 		return "", err
 	}
 
 	now := time.Now().UnixNano()
-	fName := fmt.Sprintf("%s-%d.yml", strings.Replace(name, "/", "-", -1), now)
+	fName := fmt.Sprintf("%s-%d.yml", config.SanitizeFilename(name), now)
 
 	path := filepath.Join(dir, fName)
 	mod := os.O_CREATE | os.O_WRONLY

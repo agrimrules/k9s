@@ -3,10 +3,9 @@ package render
 import (
 	"reflect"
 	"sort"
-	"strconv"
-	"time"
+	"strings"
 
-	"vbom.ml/util/sortorder"
+	"github.com/fvbommel/sortorder"
 )
 
 // Fields represents a collection of row fields.
@@ -46,7 +45,7 @@ func (f Fields) Clone() Fields {
 
 // ----------------------------------------------------------------------------
 
-// Row represents a colllection of columns.
+// Row represents a collection of columns.
 type Row struct {
 	ID     string
 	Fields Fields
@@ -134,7 +133,7 @@ func (rr Rows) Upsert(r Row) Rows {
 	return rr
 }
 
-// Find locates a row by id. Retturns false is not found.
+// Find locates a row by id. Returns false is not found.
 func (rr Rows) Find(id string) (int, bool) {
 	for i, r := range rr {
 		if r.ID == id {
@@ -146,8 +145,14 @@ func (rr Rows) Find(id string) (int, bool) {
 }
 
 // Sort rows based on column index and order.
-func (rr Rows) Sort(col int, asc bool) {
-	t := RowSorter{Rows: rr, Index: col, Asc: asc}
+func (rr Rows) Sort(col int, asc, isNum, isDur bool) {
+	t := RowSorter{
+		Rows:       rr,
+		Index:      col,
+		IsNumber:   isNum,
+		IsDuration: isDur,
+		Asc:        asc,
+	}
 	sort.Sort(t)
 }
 
@@ -155,9 +160,10 @@ func (rr Rows) Sort(col int, asc bool) {
 
 // RowSorter sorts rows.
 type RowSorter struct {
-	Rows  Rows
-	Index int
-	Asc   bool
+	Rows                 Rows
+	Index                int
+	IsNumber, IsDuration bool
+	Asc                  bool
 }
 
 func (s RowSorter) Len() int {
@@ -169,27 +175,34 @@ func (s RowSorter) Swap(i, j int) {
 }
 
 func (s RowSorter) Less(i, j int) bool {
-	return Less(s.Asc, s.Rows[i].Fields[s.Index], s.Rows[j].Fields[s.Index])
+	v1, v2 := s.Rows[i].Fields[s.Index], s.Rows[j].Fields[s.Index]
+	id1, id2 := s.Rows[i].ID, s.Rows[j].ID
+	less := Less(s.IsNumber, s.IsDuration, id1, id2, v1, v2)
+	if s.Asc {
+		return less
+	}
+	return !less
 }
 
 // ----------------------------------------------------------------------------
 // Helpers...
 
-func toAgeDuration(dur string) string {
-	d, err := time.ParseDuration(dur)
-	if err != nil {
-		return durationToSeconds(dur)
-	}
-
-	return strconv.Itoa(int(d.Seconds()))
-}
-
 // Less return true if c1 < c2.
-func Less(asc bool, c1, c2 string) bool {
-	c1, c2 = toAgeDuration(c1), toAgeDuration(c2)
-	b := sortorder.NaturalLess(c1, c2)
-	if asc {
-		return b
+func Less(isNumber, isDuration bool, id1, id2, v1, v2 string) bool {
+	var less bool
+	switch {
+	case isNumber:
+		v1, v2 = strings.Replace(v1, ",", "", -1), strings.Replace(v2, ",", "", -1)
+		less = sortorder.NaturalLess(v1, v2)
+	case isDuration:
+		d1, d2 := durationToSeconds(v1), durationToSeconds(v2)
+		less = d1 <= d2
+	default:
+		less = sortorder.NaturalLess(v1, v2)
 	}
-	return !b
+	if v1 == v2 {
+		return sortorder.NaturalLess(id1, id2)
+	}
+
+	return less
 }

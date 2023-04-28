@@ -15,15 +15,15 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func computeFilename(cluster, ns, title, path string) (string, error) {
+func computeFilename(screenDumpDir, context, ns, title, path string) (string, error) {
 	now := time.Now().UnixNano()
 
-	dir := filepath.Join(config.K9sDumpDir, cluster)
+	dir := filepath.Join(screenDumpDir, context)
 	if err := ensureDir(dir); err != nil {
 		return "", err
 	}
 
-	name := title + "-" + strings.Replace(path, "/", "-", -1)
+	name := title + "-" + config.SanitizeFilename(path)
 	if path == "" {
 		name = title
 	}
@@ -38,13 +38,13 @@ func computeFilename(cluster, ns, title, path string) (string, error) {
 	return strings.ToLower(filepath.Join(dir, fName)), nil
 }
 
-func saveTable(cluster, title, path string, data render.TableData) (string, error) {
+func saveTable(screenDumpDir, context, title, path string, data *render.TableData) (string, error) {
 	ns := data.Namespace
 	if client.IsClusterWide(ns) {
 		ns = client.NamespaceAll
 	}
 
-	fPath, err := computeFilename(cluster, ns, title, path)
+	fPath, err := computeFilename(screenDumpDir, context, ns, title, path)
 	if err != nil {
 		return "", err
 	}

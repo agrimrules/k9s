@@ -13,16 +13,17 @@ builds:
       - darwin
       - windows
     goarch:
-      # - 386
       - amd64
       - arm64
       - arm
+      - ppc64le
+      - s390x
     goarm:
       - 7
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X github.com/derailed/k9s/cmd.version={{.Version}} -X github.com/derailed/k9s/cmd.commit={{.Commit}} -X github.com/derailed/k9s/cmd.date={{.Date}}
+      - -s -w -X github.com/derailed/k9s/cmd.version=v{{.Version}} -X github.com/derailed/k9s/cmd.commit={{.Commit}} -X github.com/derailed/k9s/cmd.date={{.Date}}
 archives:
   - name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
     replacements:
@@ -32,8 +33,9 @@ archives:
       bit: Arm
       bitv6: Arm6
       bitv7: Arm7
-      # 386: i386
-      amd64: x86_64
+    format_overrides:
+      - goos: windows
+        format: zip
 checksum:
   name_template: "checksums.txt"
 snapshot:
@@ -45,10 +47,10 @@ changelog:
       - "^docs:"
       - "^test:"
 
-# Homebrews
+# Homebrew
 brews:
   - name: k9s
-    github:
+    tap:
       owner: derailed
       name: homebrew-k9s
     commit_author:

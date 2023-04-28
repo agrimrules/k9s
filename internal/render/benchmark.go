@@ -3,15 +3,14 @@ package render
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/derailed/k9s/internal/client"
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -25,7 +24,9 @@ var (
 )
 
 // Benchmark renders a benchmarks to screen.
-type Benchmark struct{}
+type Benchmark struct {
+	Base
+}
 
 // ColorerFunc colors a resource row.
 func (b Benchmark) ColorerFunc() ColorerFunc {
@@ -49,7 +50,7 @@ func (Benchmark) Header(ns string) Header {
 		HeaderColumn{Name: "4XX/5XX", Align: tview.AlignRight},
 		HeaderColumn{Name: "REPORT"},
 		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		HeaderColumn{Name: "AGE", Time: true},
 	}
 }
 
@@ -57,7 +58,7 @@ func (Benchmark) Header(ns string) Header {
 func (b Benchmark) Render(o interface{}, ns string, r *Row) error {
 	bench, ok := o.(BenchInfo)
 	if !ok {
-		return fmt.Errorf("expecting benchinfo but got `%T", o)
+		return fmt.Errorf("No benchmarks available %T", o)
 	}
 
 	data, err := b.readFile(bench.Path)
@@ -76,7 +77,7 @@ func (b Benchmark) Render(o interface{}, ns string, r *Row) error {
 	return nil
 }
 
-// Happy returns true if resoure is happy, false otherwise
+// Happy returns true if resource is happy, false otherwise.
 func (Benchmark) diagnose(ns string, ff Fields) error {
 	statusCol := 3
 	if !client.IsAllNamespaces(ns) {
@@ -97,7 +98,7 @@ func (Benchmark) diagnose(ns string, ff Fields) error {
 // Helpers...
 
 func (Benchmark) readFile(file string) (string, error) {
-	data, err := ioutil.ReadFile(file)
+	data, err := os.ReadFile(file)
 	if err != nil {
 		return "", err
 	}

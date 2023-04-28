@@ -2,10 +2,10 @@ package color
 
 import (
 	"fmt"
+	"strconv"
 )
 
-// ColorFmt colorize a string with ansi colors.
-const ColorFmt = "\x1b[%dm%s\x1b[0m"
+const colorFmt = "\x1b[%dm%s\x1b[0m"
 
 // Paint describes a terminal color.
 type Paint int
@@ -30,5 +30,29 @@ func Colorize(s string, c Paint) string {
 	if c == 0 {
 		return s
 	}
-	return fmt.Sprintf(ColorFmt, c, s)
+	return fmt.Sprintf(colorFmt, c, s)
+}
+
+// ANSIColorize colors a string.
+func ANSIColorize(text string, color int) string {
+	return "\033[38;5;" + strconv.Itoa(color) + "m" + text + "\033[0m"
+}
+
+// Highlight colorize bytes at given indices.
+func Highlight(bb []byte, ii []int, c int) []byte {
+	b := make([]byte, 0, len(bb))
+	for i, j := 0, 0; i < len(bb); i++ {
+		if j < len(ii) && ii[j] == i {
+			b = append(b, colorizeByte(bb[i], 209)...)
+			j++
+		} else {
+			b = append(b, bb[i])
+		}
+	}
+
+	return b
+}
+
+func colorizeByte(b byte, color int) []byte {
+	return []byte(ANSIColorize(string(b), color))
 }

@@ -1,16 +1,14 @@
 package config
 
 import (
-	"io/ioutil"
 	"net/http"
+	"os"
 
 	"gopkg.in/yaml.v2"
 )
 
-var (
-	// K9sBench the name of the benchmarks config file.
-	K9sBench = "bench"
-)
+// K9sBench the name of the benchmarks config file.
+var K9sBench = "bench"
 
 type (
 	// Bench tracks K9s styling options.
@@ -25,7 +23,7 @@ type (
 		Containers map[string]BenchConfig `yam':"containers"`
 	}
 
-	// Auth basic auth creds
+	// Auth basic auth creds.
 	Auth struct {
 		User     string `yaml:"user"`
 		Password string `yaml:"password"`
@@ -73,7 +71,7 @@ func newBenchmark() Benchmark {
 	}
 }
 
-// Empty checks if the benchmark is set
+// Empty checks if the benchmark is set.
 func (b Benchmark) Empty() bool {
 	return b.C == 0 && b.N == 0
 }
@@ -96,9 +94,9 @@ func (s *Bench) Reload(path string) error {
 	return s.load(path)
 }
 
-// Load K9s benchmark configs from file
+// Load K9s benchmark configs from file.
 func (s *Bench) load(path string) error {
-	f, err := ioutil.ReadFile(path)
+	f, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}

@@ -1,12 +1,12 @@
 package render
 
 import (
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/tview"
 	runewidth "github.com/mattn/go-runewidth"
 	"github.com/rs/zerolog/log"
@@ -16,33 +16,45 @@ import (
 	"k8s.io/apimachinery/pkg/util/duration"
 )
 
-var durationRx = regexp.MustCompile(`\A(\d*d)*?(\d*h)*?(\d*m)*?(\d*s)*?\z`)
-
-func durationToSeconds(duration string) string {
-	tokens := durationRx.FindAllStringSubmatch(duration, -1)
-	if len(tokens) == 0 {
-		return duration
-	}
-	if len(tokens[0]) < 5 {
-		return duration
+func runesToNum(rr []rune) int64 {
+	var r int64
+	var m int64 = 1
+	for i := len(rr) - 1; i >= 0; i-- {
+		v := int64(rr[i] - '0')
+		r += v * m
+		m *= 10
 	}
 
-	d, h, m, s := tokens[0][1], tokens[0][2], tokens[0][3], tokens[0][4]
-	var n int
-	if v, err := strconv.Atoi(strings.Replace(d, "d", "", 1)); err == nil {
-		n += v * 24 * 60 * 60
-	}
-	if v, err := strconv.Atoi(strings.Replace(h, "h", "", 1)); err == nil {
-		n += v * 60 * 60
-	}
-	if v, err := strconv.Atoi(strings.Replace(m, "m", "", 1)); err == nil {
-		n += v * 60
-	}
-	if v, err := strconv.Atoi(strings.Replace(s, "s", "", 1)); err == nil {
-		n += v
+	return r
+}
+
+func durationToSeconds(duration string) int64 {
+	if len(duration) == 0 {
+		return 0
 	}
 
-	return strconv.Itoa(n)
+	num := make([]rune, 0, 5)
+	var n, m int64
+	for _, r := range duration {
+		switch r {
+		case 'y':
+			m = 365 * 24 * 60 * 60
+		case 'd':
+			m = 24 * 60 * 60
+		case 'h':
+			m = 60 * 60
+		case 'm':
+			m = 60
+		case 's':
+			m = 1
+		default:
+			num = append(num, r)
+			continue
+		}
+		n, num = n+runesToNum(num)*m, num[:0]
+	}
+
+	return n
 }
 
 // AsThousands prints a number with thousand separator.
@@ -51,7 +63,7 @@ func AsThousands(n int64) string {
 	return p.Sprintf("%d", n)
 }
 
-// Happy returns true if resoure is happy, false otherwise
+// Happy returns true if resource is happy, false otherwise.
 func Happy(ns string, h Header, r Row) bool {
 	if len(r.Fields) == 0 {
 		return true
@@ -60,15 +72,9 @@ func Happy(ns string, h Header, r Row) bool {
 	if validCol < 0 {
 		return true
 	}
+
 	return strings.TrimSpace(r.Fields[validCol]) == ""
 }
-
-// const megaByte = 1024 * 1024
-
-// // ToMB converts bytes to megabytes.
-// func ToMB(v int64) float64 {
-// 	return float64(v) / megaByte
-// }
 
 func asStatus(err error) string {
 	if err == nil {
@@ -85,14 +91,6 @@ func asSelector(s *metav1.LabelSelector) string {
 	}
 
 	return sel.String()
-}
-
-type metric struct {
-	cpu, mem, cpuLim, memLim string
-}
-
-func noMetric() metric {
-	return metric{cpu: NAValue, mem: NAValue, cpuLim: NAValue, memLim: NAValue}
 }
 
 // ToSelector flattens a map selector to a string selector.
@@ -124,7 +122,7 @@ func join(a []string, sep string) string {
 		return a[0]
 	}
 
-	var b []string
+	b := make([]string, 0, len(a))
 	for _, s := range a {
 		if s != "" {
 			b = append(b, s)
@@ -150,6 +148,11 @@ func join(a []string, sep string) string {
 	return buff.String()
 }
 
+// AsPerc prints a number as percentage with parens.
+func AsPerc(p string) string {
+	return "(" + p + ")"
+}
+
 // PrintPerc prints a number as percentage.
 func PrintPerc(p int) string {
 	return strconv.Itoa(p) + "%"
@@ -162,6 +165,13 @@ func IntToStr(p int) string {
 
 func missing(s string) string {
 	return check(s, MissingValue)
+}
+
+func naStrings(ss []string) string {
+	if len(ss) == 0 {
+		return NAValue
+	}
+	return strings.Join(ss, ",")
 }
 
 func na(s string) string {
@@ -185,17 +195,25 @@ func boolToStr(b bool) string {
 	}
 }
 
-func toAge(timestamp metav1.Time) string {
-	return time.Since(timestamp.Time).String()
+func toAge(t metav1.Time) string {
+	if t.IsZero() {
+		return UnknownValue
+	}
+
+	return duration.HumanDuration(time.Since(t.Time))
 }
 
 func toAgeHuman(s string) string {
-	d, err := time.ParseDuration(s)
+	if len(s) == 0 {
+		return UnknownValue
+	}
+
+	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
 		return NAValue
 	}
 
-	return duration.HumanDuration(d)
+	return duration.HumanDuration(time.Since(t))
 }
 
 // Truncate a string to the given l and suffix ellipsis if needed.
@@ -203,7 +221,7 @@ func Truncate(str string, width int) string {
 	return runewidth.Truncate(str, width, string(tview.SemigraphicsHorizontalEllipsis))
 }
 
-func mapToStr(m map[string]string) (s string) {
+func mapToStr(m map[string]string) string {
 	if len(m) == 0 {
 		return ""
 	}
@@ -214,14 +232,15 @@ func mapToStr(m map[string]string) (s string) {
 	}
 	sort.Strings(kk)
 
+	bb := make([]byte, 0, 100)
 	for i, k := range kk {
-		s += k + "=" + m[k]
+		bb = append(bb, k+"="+m[k]...)
 		if i < len(kk)-1 {
-			s += " "
+			bb = append(bb, ' ')
 		}
 	}
 
-	return
+	return string(bb)
 }
 
 func mapToIfc(m interface{}) (s string) {
@@ -257,14 +276,18 @@ func mapToIfc(m interface{}) (s string) {
 	return
 }
 
-// ToMillicore shows cpu reading for human.
-func ToMillicore(v int64) string {
+func toMc(v int64) string {
+	if v == 0 {
+		return ZeroValue
+	}
 	return strconv.Itoa(int(v))
 }
 
-// ToMi shows mem reading for human.
-func ToMi(v int64) string {
-	return strconv.Itoa(int(v))
+func toMi(v int64) string {
+	if v == 0 {
+		return ZeroValue
+	}
+	return strconv.Itoa(int(client.ToMB(v)))
 }
 
 func boolPtrToStr(b *bool) string {
@@ -298,7 +321,7 @@ func Pad(s string, width int) string {
 	return s + strings.Repeat(" ", width-len(s))
 }
 
-// Converts labels string to map
+// Converts labels string to map.
 func labelize(labels string) map[string]string {
 	ll := strings.Split(labels, ",")
 	data := make(map[string]string, len(ll))

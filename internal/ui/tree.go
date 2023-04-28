@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/derailed/k9s/internal/model"
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
 )
 
 // KeyListenerFunc listens to key presses.
@@ -17,7 +17,7 @@ type Tree struct {
 
 	actions      KeyActions
 	selectedItem string
-	cmdBuff      *model.CmdBuff
+	cmdBuff      *model.FishBuff
 	expandNodes  bool
 	Count        int
 	keyListener  KeyListenerFunc
@@ -29,18 +29,18 @@ func NewTree() *Tree {
 		TreeView:    tview.NewTreeView(),
 		expandNodes: true,
 		actions:     make(KeyActions),
-		cmdBuff:     model.NewCmdBuff('/', model.FilterBuffer),
+		cmdBuff:     model.NewFishBuff('/', model.FilterBuffer),
 	}
 }
 
-// Init initializes the view
+// Init initializes the view.
 func (t *Tree) Init(ctx context.Context) error {
 	t.BindKeys()
 	t.SetBorder(true)
 	t.SetBorderAttributes(tcell.AttrBold)
 	t.SetBorderPadding(0, 0, 1, 1)
 	t.SetGraphics(true)
-	t.SetGraphicsColor(tcell.ColorFloralWhite)
+	t.SetGraphicsColor(tcell.ColorCadetBlue)
 	t.SetInputCapture(t.keyboard)
 
 	return nil
@@ -62,7 +62,7 @@ func (t *Tree) ExpandNodes() bool {
 }
 
 // CmdBuff returns the filter command.
-func (t *Tree) CmdBuff() *model.CmdBuff {
+func (t *Tree) CmdBuff() *model.FishBuff {
 	return t.cmdBuff
 }
 

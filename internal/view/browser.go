@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/derailed/k9s/internal"
@@ -17,7 +18,7 @@ import (
 	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
 	"github.com/derailed/k9s/internal/ui/dialog"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 	"github.com/rs/zerolog/log"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -31,6 +32,7 @@ type Browser struct {
 	accessor   dao.Accessor
 	contextFn  ContextFunc
 	cancelFn   context.CancelFunc
+	mx         sync.RWMutex
 }
 
 // NewBrowser returns a new browser.
@@ -40,13 +42,18 @@ func NewBrowser(gvr client.GVR) ResourceViewer {
 	}
 }
 
-// Init watches all running pods in given namespace
+// Init watches all running pods in given namespace.
 func (b *Browser) Init(ctx context.Context) error {
 	var err error
 	b.meta, err = dao.MetaAccess.MetaFor(b.GVR())
 	if err != nil {
 		return err
 	}
+	colorerFn := render.DefaultColorer
+	if r, ok := model.Registry[b.GVR().String()]; ok {
+		colorerFn = r.Renderer.ColorerFunc()
+	}
+	b.GetTable().SetColorerFn(colorerFn)
 
 	if err = b.Table.Init(ctx); err != nil {
 		return err
@@ -57,11 +64,13 @@ func (b *Browser) Init(ctx context.Context) error {
 			return e
 		}
 	}
-	b.app.CmdBuff().Reset()
+	if b.App().IsRunning() {
+		b.app.CmdBuff().Reset()
+	}
 
-	b.bindKeys()
-	if b.bindKeysFn != nil {
-		b.bindKeysFn(b.Actions())
+	b.bindKeys(b.Actions())
+	for _, f := range b.bindKeysFn {
+		f(b.Actions())
 	}
 	b.accessor, err = dao.AccessorFor(b.app.factory, b.GVR())
 	if err != nil {
@@ -73,12 +82,16 @@ func (b *Browser) Init(ctx context.Context) error {
 	if row == 0 && b.GetRowCount() > 0 {
 		b.Select(1, 0)
 	}
-	b.GetModel().AddListener(b)
 	b.GetModel().SetRefreshRate(time.Duration(b.App().Config.K9s.GetRefreshRate()) * time.Second)
 
 	b.CmdBuff().SetSuggestionFn(b.suggestFilter())
 
 	return nil
+}
+
+// InCmdMode checks if prompt is active.
+func (b *Browser) InCmdMode() bool {
+	return b.CmdBuff().InCmdMode()
 }
 
 func (b *Browser) suggestFilter() model.SuggestionFunc {
@@ -92,24 +105,22 @@ func (b *Browser) suggestFilter() model.SuggestionFunc {
 
 		s = strings.ToLower(s)
 		for _, h := range b.App().filterHistory.List() {
-			if h == s {
+			if s == h {
 				continue
 			}
 			if strings.HasPrefix(h, s) {
 				entries = append(entries, strings.Replace(h, s, "", 1))
 			}
 		}
-		if len(entries) == 0 {
-			return nil
-		}
 		return
 	}
 }
 
-func (b *Browser) bindKeys() {
-	b.Actions().Add(ui.KeyActions{
+func (b *Browser) bindKeys(aa ui.KeyActions) {
+	aa.Add(ui.KeyActions{
 		tcell.KeyEscape: ui.NewSharedKeyAction("Filter Reset", b.resetCmd, false),
 		tcell.KeyEnter:  ui.NewSharedKeyAction("Filter", b.filterCmd, false),
+		tcell.KeyHelp:   ui.NewSharedKeyAction("Help", b.helpCmd, false),
 	})
 }
 
@@ -120,35 +131,65 @@ func (b *Browser) SetInstance(path string) {
 
 // Start initializes browser updates.
 func (b *Browser) Start() {
+	b.app.Config.ValidateFavorites()
+	ns := b.app.Config.ActiveNamespace()
+	if n := b.GetModel().GetNamespace(); !client.IsClusterScoped(n) {
+		ns = n
+	}
+	if err := b.app.switchNS(ns); err != nil {
+		log.Error().Err(err).Msgf("ns switch failed")
+	}
+
 	b.Stop()
+	b.GetModel().AddListener(b)
 	b.Table.Start()
 	b.CmdBuff().AddListener(b)
-	b.GetModel().Watch(b.prepareContext())
+	if err := b.GetModel().Watch(b.prepareContext()); err != nil {
+		b.App().Flash().Err(fmt.Errorf("Watcher failed for %s -- %w", b.GVR(), err))
+	}
 }
 
 // Stop terminates browser updates.
 func (b *Browser) Stop() {
+	b.mx.Lock()
+	{
+		if b.cancelFn != nil {
+			b.cancelFn()
+			b.cancelFn = nil
+		}
+	}
+	b.mx.Unlock()
+	b.GetModel().RemoveListener(b)
 	b.CmdBuff().RemoveListener(b)
 	b.Table.Stop()
-	if b.cancelFn != nil {
-		b.cancelFn()
-		b.cancelFn = nil
-	}
 }
 
 // BufferChanged indicates the buffer was changed.
-func (b *Browser) BufferChanged(s string) {}
+func (b *Browser) BufferChanged(_, _ string) {}
+
+// BufferCompleted indicates input was accepted.
+func (b *Browser) BufferCompleted(text, _ string) {
+	if ui.IsLabelSelector(text) {
+		b.GetModel().SetLabelFilter(ui.TrimLabelSelector(text))
+	} else {
+		b.GetModel().SetLabelFilter("")
+	}
+}
 
 // BufferActive indicates the buff activity changed.
 func (b *Browser) BufferActive(state bool, k model.BufferKind) {
-	if b.cancelFn != nil {
-		b.cancelFn()
+	if state {
+		return
 	}
-	b.GetModel().Watch(b.prepareContext())
-
-	if !state && b.GetRowCount() > 1 {
-		b.App().filterHistory.Push(b.CmdBuff().GetText())
+	if err := b.GetModel().Refresh(b.prepareContext()); err != nil {
+		log.Error().Err(err).Msgf("Refresh failed for %s", b.GVR())
 	}
+	b.app.QueueUpdateDraw(func() {
+		b.Update(b.GetModel().Peek(), b.App().Conn().HasMetrics())
+		if b.GetRowCount() > 1 {
+			b.App().filterHistory.Push(b.CmdBuff().GetText())
+		}
+	})
 }
 
 func (b *Browser) prepareContext() context.Context {
@@ -186,13 +227,19 @@ func (b *Browser) Aliases() []string {
 // Model Protocol...
 
 // TableDataChanged notifies view new data is available.
-func (b *Browser) TableDataChanged(data render.TableData) {
-	if !b.app.ConOK() {
+func (b *Browser) TableDataChanged(data *render.TableData) {
+	var cancel context.CancelFunc
+	b.mx.RLock()
+	cancel = b.cancelFn
+	b.mx.RUnlock()
+
+	if !b.app.ConOK() || cancel == nil || !b.app.IsRunning() {
 		return
 	}
+
 	b.app.QueueUpdateDraw(func() {
 		b.refreshActions()
-		b.Update(data)
+		b.Update(data, b.app.Conn().HasMetrics())
 	})
 }
 
@@ -213,32 +260,31 @@ func (b *Browser) viewCmd(evt *tcell.EventKey) *tcell.EventKey {
 		return evt
 	}
 
-	ctx := b.defaultContext()
-	raw, err := b.GetModel().ToYAML(ctx, path)
-	if err != nil {
-		b.App().Flash().Errf("unable to get resource %q -- %s", b.GVR(), err)
+	v := NewLiveView(b.app, "YAML", model.NewYAML(b.GVR(), path))
+	if err := v.app.inject(v, false); err != nil {
+		v.app.Flash().Err(err)
+	}
+	return nil
+}
+
+func (b *Browser) helpCmd(evt *tcell.EventKey) *tcell.EventKey {
+	if b.CmdBuff().InCmdMode() {
 		return nil
 	}
 
-	details := NewDetails(b.app, "YAML", path, true).Update(raw)
-	if err := b.App().inject(details); err != nil {
-		b.App().Flash().Err(err)
-	}
-
-	return nil
+	return evt
 }
 
 func (b *Browser) resetCmd(evt *tcell.EventKey) *tcell.EventKey {
 	if !b.CmdBuff().InCmdMode() {
-		b.CmdBuff().Reset()
+		b.CmdBuff().ClearText(false)
 		return b.App().PrevCmd(evt)
 	}
 
+	b.CmdBuff().Reset()
 	if ui.IsLabelSelector(b.CmdBuff().GetText()) {
-		b.CmdBuff().Reset()
 		b.Start()
 	}
-	b.CmdBuff().Reset()
 	b.Refresh()
 
 	return nil
@@ -318,10 +364,14 @@ func (b *Browser) editCmd(evt *tcell.EventKey) *tcell.EventKey {
 	path := b.GetSelectedItem()
 	if path == "" {
 		return evt
-
 	}
 	ns, n := client.Namespaced(path)
-
+	if client.IsClusterScoped(ns) {
+		ns = client.AllNamespaces
+	}
+	if b.GVR().String() == "v1/namespaces" {
+		ns = n
+	}
 	if ok, err := b.app.Conn().CanI(ns, b.GVR().String(), []string{"patch"}); !ok || err != nil {
 		b.App().Flash().Err(fmt.Errorf("Current user can't edit resource %s", b.GVR()))
 		return nil
@@ -332,9 +382,11 @@ func (b *Browser) editCmd(evt *tcell.EventKey) *tcell.EventKey {
 	{
 		args := make([]string, 0, 10)
 		args = append(args, "edit")
-		args = append(args, b.meta.SingularName)
-		args = append(args, "-n", ns)
-		if !runK(b.app, shellOpts{clear: true, args: append(args, n)}) {
+		args = append(args, b.GVR().FQN(n))
+		if ns != client.AllNamespaces {
+			args = append(args, "-n", ns)
+		}
+		if !runK(b.app, shellOpts{clear: true, args: args}) {
 			b.app.Flash().Err(errors.New("Edit exec failed"))
 		}
 	}
@@ -359,7 +411,14 @@ func (b *Browser) switchNamespaceCmd(evt *tcell.EventKey) *tcell.EventKey {
 		return nil
 	}
 
-	b.app.switchNS(ns)
+	if client.IsAllNamespace(ns) {
+		b.GetTable().SetSortCol("NAMESPACE", true)
+	}
+
+	if err := b.app.switchNS(ns); err != nil {
+		b.App().Flash().Err(err)
+		return nil
+	}
 	b.setNamespace(ns)
 	b.app.Flash().Infof("Viewing namespace `%s`...", ns)
 	b.refresh()
@@ -387,26 +446,27 @@ func (b *Browser) setNamespace(ns string) {
 	if !b.meta.Namespaced {
 		ns = client.ClusterScope
 	}
-	b.GetModel().SetNamespace(client.CleanseNamespace(ns))
+	b.GetModel().SetNamespace(ns)
 }
 
 func (b *Browser) defaultContext() context.Context {
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, internal.KeyFactory, b.app.factory)
+	ctx := context.WithValue(context.Background(), internal.KeyFactory, b.app.factory)
 	ctx = context.WithValue(ctx, internal.KeyGVR, b.GVR().String())
-	ctx = context.WithValue(ctx, internal.KeyPath, b.Path)
-
-	ctx = context.WithValue(ctx, internal.KeyLabels, "")
+	if b.Path != "" {
+		ctx = context.WithValue(ctx, internal.KeyPath, b.Path)
+	}
 	if ui.IsLabelSelector(b.CmdBuff().GetText()) {
 		ctx = context.WithValue(ctx, internal.KeyLabels, ui.TrimLabelSelector(b.CmdBuff().GetText()))
 	}
-	ctx = context.WithValue(ctx, internal.KeyFields, "")
 	ctx = context.WithValue(ctx, internal.KeyNamespace, client.CleanseNamespace(b.App().Config.ActiveNamespace()))
 
 	return ctx
 }
 
 func (b *Browser) refreshActions() {
+	if b.App().Content.Top() != nil && b.App().Content.Top().Name() != b.Name() {
+		return
+	}
 	aa := ui.KeyActions{
 		ui.KeyC:        ui.NewKeyAction("Copy", b.cpCmd, false),
 		tcell.KeyEnter: ui.NewKeyAction("View", b.enterCmd, false),
@@ -415,7 +475,7 @@ func (b *Browser) refreshActions() {
 
 	if b.app.ConOK() {
 		b.namespaceActions(aa)
-		if !b.app.Config.K9s.GetReadOnly() {
+		if !b.app.Config.K9s.IsReadOnly() {
 			if client.Can(b.meta.Verbs, "edit") {
 				aa[ui.KeyE] = ui.NewKeyAction("Edit", b.editCmd, true)
 			}
@@ -432,11 +492,10 @@ func (b *Browser) refreshActions() {
 
 	pluginActions(b, aa)
 	hotKeyActions(b, aa)
-	b.Actions().Add(aa)
-
-	if b.bindKeysFn != nil {
-		b.bindKeysFn(b.Actions())
+	for _, f := range b.bindKeysFn {
+		f(aa)
 	}
+	b.Actions().Add(aa)
 	b.app.Menu().HydrateMenu(b.Hints())
 }
 
@@ -459,7 +518,7 @@ func (b *Browser) namespaceActions(aa ui.KeyActions) {
 }
 
 func (b *Browser) simpleDelete(selections []string, msg string) {
-	dialog.ShowConfirm(b.app.Content.Pages, "Confirm Delete", msg, func() {
+	dialog.ShowConfirm(b.app.Styles.Dialog(), b.app.Content.Pages, "Confirm Delete", msg, func() {
 		b.ShowDeleted()
 		if len(selections) > 1 {
 			b.app.Flash().Infof("Delete %d marked %s", len(selections), b.GVR())
@@ -470,20 +529,21 @@ func (b *Browser) simpleDelete(selections []string, msg string) {
 			nuker, ok := b.accessor.(dao.Nuker)
 			if !ok {
 				b.app.Flash().Errf("Invalid nuker %T", b.accessor)
-				return
+				continue
 			}
-			if err := nuker.Delete(sel, true, true); err != nil {
+			if err := nuker.Delete(context.Background(), sel, nil, dao.DefaultGrace); err != nil {
 				b.app.Flash().Errf("Delete failed with `%s", err)
 			} else {
-				b.GetTable().DeleteMark(sel)
+				b.app.factory.DeleteForwarder(sel)
 			}
+			b.GetTable().DeleteMark(sel)
 		}
 		b.refresh()
 	}, func() {})
 }
 
 func (b *Browser) resourceDelete(selections []string, msg string) {
-	dialog.ShowDelete(b.app.Content.Pages, msg, func(cascade, force bool) {
+	dialog.ShowDelete(b.app.Styles.Dialog(), b.app.Content.Pages, msg, func(propagation *metav1.DeletionPropagation, force bool) {
 		b.ShowDeleted()
 		if len(selections) > 1 {
 			b.app.Flash().Infof("Delete %d marked %s", len(selections), b.GVR())
@@ -491,13 +551,16 @@ func (b *Browser) resourceDelete(selections []string, msg string) {
 			b.app.Flash().Infof("Delete resource %s %s", b.GVR(), selections[0])
 		}
 		for _, sel := range selections {
-			if err := b.GetModel().Delete(b.defaultContext(), sel, cascade, force); err != nil {
+			grace := dao.DefaultGrace
+			if force {
+				grace = dao.ForceGrace
+			}
+			if err := b.GetModel().Delete(b.defaultContext(), sel, propagation, grace); err != nil {
 				b.app.Flash().Errf("Delete failed with `%s", err)
 			} else {
-				b.app.Flash().Infof("%s `%s deleted successfully", b.GVR(), sel)
 				b.app.factory.DeleteForwarder(sel)
-				b.GetTable().DeleteMark(sel)
 			}
+			b.GetTable().DeleteMark(sel)
 		}
 		b.refresh()
 	}, func() {})

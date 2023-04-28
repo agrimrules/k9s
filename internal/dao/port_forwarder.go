@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/derailed/k9s/internal/client"
+	"github.com/derailed/k9s/internal/port"
 	"github.com/rs/zerolog/log"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,8 +22,6 @@ import (
 	"k8s.io/client-go/transport/spdy"
 )
 
-const localhost = "localhost"
-
 // PortForwarder tracks a port forward stream.
 type PortForwarder struct {
 	Factory
@@ -31,8 +30,7 @@ type PortForwarder struct {
 	stopChan, readyChan chan struct{}
 	active              bool
 	path                string
-	container           string
-	ports               []string
+	tunnel              port.PortTunnel
 	age                 time.Time
 }
 
@@ -60,52 +58,51 @@ func (p *PortForwarder) SetActive(b bool) {
 	p.active = b
 }
 
-// Ports returns the forwarded ports mappings.
-func (p *PortForwarder) Ports() []string {
-	return p.ports
+// Port returns the port mapping.
+func (p *PortForwarder) Port() string {
+	return p.tunnel.PortMap()
 }
 
-// Path returns the pod resource path.
-func (p *PortForwarder) Path() string {
-	return PortForwardID(p.path, p.container)
+// ContainerPort returns the container port.
+func (p *PortForwarder) ContainerPort() string {
+	return p.tunnel.ContainerPort
 }
 
-// PortForwardID computes port-forward identifier.
-func PortForwardID(path, co string) string {
-	return path + ":" + co
+// LocalPort returns the local port.
+func (p *PortForwarder) LocalPort() string {
+	return p.tunnel.LocalPort
 }
 
-// Container returns the targetes container.
+// ID returns a pf id.
+func (p *PortForwarder) ID() string {
+	return PortForwardID(p.path, p.tunnel.Container, p.tunnel.PortMap())
+}
+
+// Container returns the target's container.
 func (p *PortForwarder) Container() string {
-	return p.container
+	return p.tunnel.Container
 }
 
-// Stop terminates a port forard
+// Stop terminates a port forward.
 func (p *PortForwarder) Stop() {
-	log.Debug().Msgf("<<< Stopping PortForward %q %v", p.path, p.ports)
+	log.Debug().Msgf("<<< Stopping PortForward %s", p.ID())
 	p.active = false
 	close(p.stopChan)
 }
 
 // FQN returns the portforward unique id.
 func (p *PortForwarder) FQN() string {
-	return p.path + ":" + p.container
+	return p.path + ":" + p.tunnel.Container
 }
 
 // HasPortMapping checks if port mapping is defined for this fwd.
-func (p *PortForwarder) HasPortMapping(m string) bool {
-	for _, mapping := range p.ports {
-		if mapping == m {
-			return true
-		}
-	}
-	return false
+func (p *PortForwarder) HasPortMapping(portMap string) bool {
+	return p.tunnel.PortMap() == portMap
 }
 
 // Start initiates a port forward session for a given pod and ports.
-func (p *PortForwarder) Start(path, co string, t client.PortTunnel) (*portforward.PortForwarder, error) {
-	fwds := []string{t.PortMap()}
-	p.path, p.container, p.ports, p.age = path, co, fwds, time.Now()
+func (p *PortForwarder) Start(path string, tt port.PortTunnel) (*portforward.PortForwarder, error) {
+	p.path, p.tunnel, p.age = path, tt, time.Now()
 
 	ns, n := client.Namespaced(path)
 	auth, err := p.Client().CanI(ns, "v1/pods", []string{client.GetVerb})
@@ -116,9 +113,10 @@ func (p *PortForwarder) Start(path, co string, t client.PortTunnel) (*portforwar
 		return nil, fmt.Errorf("user is not authorized to get pods")
 	}
 
+	podName := strings.Split(n, "|")[0]
 	var res Pod
 	res.Init(p, client.NewGVR("v1/pods"))
-	pod, err := res.GetInstance(path)
+	pod, err := res.GetInstance(client.FQN(ns, podName))
 	if err != nil {
 		return nil, err
 	}
@@ -134,26 +132,28 @@ func (p *PortForwarder) Start(path, co string, t client.PortTunnel) (*portforwar
 		return nil, fmt.Errorf("user is not authorized to update portforward")
 	}
 
-	rcfg := p.Client().RestConfigOrDie()
-	rcfg.GroupVersion = &schema.GroupVersion{Group: "", Version: "v1"}
-	rcfg.APIPath = "/api"
-	codec, _ := codec()
-	rcfg.NegotiatedSerializer = codec.WithoutConversion()
-	clt, err := rest.RESTClientFor(rcfg)
+	cfg, err := p.Client().RestConfig()
 	if err != nil {
-		log.Debug().Msgf("Boom! %#v", err)
+		return nil, err
+	}
+	cfg.GroupVersion = &schema.GroupVersion{Group: "", Version: "v1"}
+	cfg.APIPath = "/api"
+	codec, _ := codec()
+	cfg.NegotiatedSerializer = codec.WithoutConversion()
+	clt, err := rest.RESTClientFor(cfg)
+	if err != nil {
 		return nil, err
 	}
 	req := clt.Post().
 		Resource("pods").
 		Namespace(ns).
-		Name(n).
+		Name(podName).
 		SubResource("portforward")
 
-	return p.forwardPorts("POST", req.URL(), t.Address, fwds)
+	return p.forwardPorts("POST", req.URL(), tt.Address, tt.PortMap())
 }
 
-func (p *PortForwarder) forwardPorts(method string, url *url.URL, address string, ports []string) (*portforward.PortForwarder, error) {
+func (p *PortForwarder) forwardPorts(method string, url *url.URL, addr, portMap string) (*portforward.PortForwarder, error) {
 	cfg, err := p.Client().Config().RESTConfig()
 	if err != nil {
 		return nil, err
@@ -162,17 +162,22 @@ func (p *PortForwarder) forwardPorts(method string, url *url.URL, address string
 	if err != nil {
 		return nil, err
 	}
-
 	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, method, url)
-	if address == "" {
-		address = localhost
-	}
-	addrs := strings.Split(address, ",")
-	return portforward.NewOnAddresses(dialer, addrs, ports, p.stopChan, p.readyChan, p.Out, p.ErrOut)
+
+	return portforward.NewOnAddresses(dialer, []string{addr}, []string{portMap}, p.stopChan, p.readyChan, p.Out, p.ErrOut)
 }
 
 // ----------------------------------------------------------------------------
 // Helpers...
+
+// PortForwardID computes port-forward identifier.
+func PortForwardID(path, co, portMap string) string {
+	if strings.Contains(path, "|") {
+		return path + "|" + portMap
+	}
+
+	return path + "|" + co + "|" + portMap
+}
 
 func codec() (serializer.CodecFactory, runtime.ParameterCodec) {
 	scheme := runtime.NewScheme()

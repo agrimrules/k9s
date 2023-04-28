@@ -11,13 +11,20 @@ import (
 	"github.com/derailed/k9s/internal/model"
 	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
+	"github.com/derailed/tcell/v2"
 	"github.com/fatih/color"
-	"github.com/gdamore/tcell"
 	"github.com/rs/zerolog/log"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+)
+
+const (
+	windowsOS      = "windows"
+	powerShell     = "powershell"
+	osBetaSelector = "beta.kubernetes.io/os"
+	osSelector     = "kubernetes.io/os"
 )
 
 // Pod represents a pod viewer.
@@ -27,16 +34,29 @@ type Pod struct {
 
 // NewPod returns a new viewer.
 func NewPod(gvr client.GVR) ResourceViewer {
-	p := Pod{
-		ResourceViewer: NewPortForwardExtender(
-			NewLogsExtender(NewBrowser(gvr), nil),
+	var p Pod
+	p.ResourceViewer = NewPortForwardExtender(
+		NewImageExtender(
+			NewLogsExtender(NewBrowser(gvr), p.logOptions),
 		),
-	}
-	p.SetBindKeysFn(p.bindKeys)
+	)
+	p.AddBindKeysFn(p.bindKeys)
 	p.GetTable().SetEnterFn(p.showContainers)
-	p.GetTable().SetColorerFn(render.Pod{}.ColorerFunc())
+	p.GetTable().SetDecorateFn(p.portForwardIndicator)
 
 	return &p
+}
+
+func (p *Pod) portForwardIndicator(data *render.TableData) {
+	ff := p.App().factory.Forwarders()
+
+	col := data.IndexOfHeader("PF")
+	for _, re := range data.RowEvents {
+		if ff.IsPodForwarded(re.Row.ID) {
+			re.Row.Fields[col] = "[orange::b]Ⓕ"
+		}
+	}
+	decorateCpuMemHeaderRows(p.App(), data)
 }
 
 func (p *Pod) bindDangerousKeys(aa ui.KeyActions) {
@@ -48,29 +68,57 @@ func (p *Pod) bindDangerousKeys(aa ui.KeyActions) {
 }
 
 func (p *Pod) bindKeys(aa ui.KeyActions) {
-	if !p.App().Config.K9s.GetReadOnly() {
+	if !p.App().Config.K9s.IsReadOnly() {
 		p.bindDangerousKeys(aa)
 	}
 
 	aa.Add(ui.KeyActions{
-		ui.KeyShiftR:   ui.NewKeyAction("Sort Ready", p.GetTable().SortColCmd(readyCol, true), false),
-		ui.KeyShiftT:   ui.NewKeyAction("Sort Restart", p.GetTable().SortColCmd("RESTARTS", false), false),
-		ui.KeyShiftS:   ui.NewKeyAction("Sort Status", p.GetTable().SortColCmd(statusCol, true), false),
-		ui.KeyShiftC:   ui.NewKeyAction("Sort CPU", p.GetTable().SortColCmd(cpuCol, false), false),
-		ui.KeyShiftM:   ui.NewKeyAction("Sort MEM", p.GetTable().SortColCmd(memCol, false), false),
-		ui.KeyShiftX:   ui.NewKeyAction("Sort %CPU (REQ)", p.GetTable().SortColCmd("%CPU", false), false),
-		ui.KeyShiftZ:   ui.NewKeyAction("Sort %MEM (REQ)", p.GetTable().SortColCmd("%MEM", false), false),
-		tcell.KeyCtrlX: ui.NewKeyAction("Sort %CPU (LIM)", p.GetTable().SortColCmd("%CPU/L", false), false),
-		tcell.KeyCtrlQ: ui.NewKeyAction("Sort %MEM (LIM)", p.GetTable().SortColCmd("%MEM/L", false), false),
-		ui.KeyShiftI:   ui.NewKeyAction("Sort IP", p.GetTable().SortColCmd("IP", true), false),
-		ui.KeyShiftO:   ui.NewKeyAction("Sort Node", p.GetTable().SortColCmd("NODE", true), false),
+		ui.KeyN:      ui.NewKeyAction("Show Node", p.showNode, true),
+		ui.KeyF:      ui.NewKeyAction("Show PortForward", p.showPFCmd, true),
+		ui.KeyShiftR: ui.NewKeyAction("Sort Ready", p.GetTable().SortColCmd(readyCol, true), false),
+		ui.KeyShiftT: ui.NewKeyAction("Sort Restart", p.GetTable().SortColCmd("RESTARTS", false), false),
+		ui.KeyShiftS: ui.NewKeyAction("Sort Status", p.GetTable().SortColCmd(statusCol, true), false),
+		ui.KeyShiftI: ui.NewKeyAction("Sort IP", p.GetTable().SortColCmd("IP", true), false),
+		ui.KeyShiftO: ui.NewKeyAction("Sort Node", p.GetTable().SortColCmd("NODE", true), false),
 	})
+	aa.Add(resourceSorters(p.GetTable()))
+}
+
+func (p *Pod) logOptions(prev bool) (*dao.LogOptions, error) {
+	path := p.GetTable().GetSelectedItem()
+	if path == "" {
+		return nil, errors.New("you must provide a selection")
+	}
+
+	pod, err := fetchPod(p.App().factory, path)
+	if err != nil {
+		return nil, err
+	}
+
+	cc, cfg := fetchContainers(pod.Spec, true), p.App().Config.K9s.Logger
+	opts := dao.LogOptions{
+		Path:            path,
+		Lines:           int64(cfg.TailCount),
+		SinceSeconds:    cfg.SinceSeconds,
+		SingleContainer: len(cc) == 1,
+		ShowTimestamp:   cfg.ShowTime,
+		Previous:        prev,
+	}
+	if c, ok := dao.GetDefaultLogContainer(pod.ObjectMeta, pod.Spec); ok {
+		opts.Container, opts.DefaultContainer = c, c
+	} else if len(cc) == 1 {
+		opts.Container = cc[0]
+	} else {
+		opts.AllContainers = true
+	}
+
+	return &opts, nil
 }
 
 func (p *Pod) showContainers(app *App, model ui.Tabular, gvr, path string) {
 	co := NewContainer(client.NewGVR("containers"))
 	co.SetContextFn(p.coContext)
-	if err := app.inject(co); err != nil {
+	if err := app.inject(co, false); err != nil {
 		app.Flash().Err(err)
 	}
 }
@@ -79,11 +127,59 @@ func (p *Pod) coContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, internal.KeyPath, p.GetTable().GetSelectedItem())
 }
 
-// Commands...
+// Handlers...
+
+func (p *Pod) showNode(evt *tcell.EventKey) *tcell.EventKey {
+	path := p.GetTable().GetSelectedItem()
+	if path == "" {
+		return evt
+	}
+	pod, err := fetchPod(p.App().factory, path)
+	if err != nil {
+		p.App().Flash().Err(err)
+		return nil
+	}
+	if pod.Spec.NodeName == "" {
+		p.App().Flash().Err(errors.New("no node assigned"))
+		return nil
+	}
+	no := NewNode(client.NewGVR("v1/nodes"))
+	no.SetInstance(pod.Spec.NodeName)
+	//no.SetContextFn(nodeContext(pod.Spec.NodeName))
+	if err := p.App().inject(no, false); err != nil {
+		p.App().Flash().Err(err)
+	}
+
+	return nil
+}
+
+func (p *Pod) showPFCmd(evt *tcell.EventKey) *tcell.EventKey {
+	path := p.GetTable().GetSelectedItem()
+	if path == "" {
+		return evt
+	}
+
+	if !p.App().factory.Forwarders().IsPodForwarded(path) {
+		p.App().Flash().Errf("no port-forward defined")
+		return nil
+	}
+	pf := NewPortForward(client.NewGVR("portforwards"))
+	pf.SetContextFn(p.portForwardContext)
+	if err := p.App().inject(pf, false); err != nil {
+		p.App().Flash().Err(err)
+	}
+
+	return nil
+}
+
+func (p *Pod) portForwardContext(ctx context.Context) context.Context {
+	ctx = context.WithValue(ctx, internal.KeyBenchCfg, p.App().BenchFile)
+	return context.WithValue(ctx, internal.KeyPath, p.GetTable().GetSelectedItem())
+}
 
 func (p *Pod) killCmd(evt *tcell.EventKey) *tcell.EventKey {
-	sels := p.GetTable().GetSelectedItems()
-	if len(sels) == 0 {
+	selections := p.GetTable().GetSelectedItems()
+	if len(selections) == 0 {
 		return evt
 	}
 
@@ -97,14 +193,19 @@ func (p *Pod) killCmd(evt *tcell.EventKey) *tcell.EventKey {
 		p.App().Flash().Err(fmt.Errorf("expecting a nuker for %q", p.GVR()))
 		return nil
 	}
+	if len(selections) > 1 {
+		p.App().Flash().Infof("Delete %d marked %s", len(selections), p.GVR())
+	} else {
+		p.App().Flash().Infof("Delete resource %s %s", p.GVR(), selections[0])
+	}
 	p.GetTable().ShowDeleted()
-	for _, res := range sels {
-		p.App().Flash().Infof("Delete resource %s -- %s", p.GVR(), res)
-		if err := nuker.Delete(res, true, true); err != nil {
+	for _, path := range selections {
+		if err := nuker.Delete(context.Background(), path, nil, dao.NowGrace); err != nil {
 			p.App().Flash().Errf("Delete failed with %s", err)
 		} else {
-			p.App().factory.DeleteForwarder(res)
+			p.App().factory.DeleteForwarder(path)
 		}
+		p.GetTable().DeleteMark(path)
 	}
 	p.Refresh()
 
@@ -156,10 +257,11 @@ func containerShellin(a *App, comp model.Component, path, co string) error {
 		return nil
 	}
 
-	cc, err := fetchContainers(a.factory, path, false)
+	pod, err := fetchPod(a.factory, path)
 	if err != nil {
 		return err
 	}
+	cc := fetchContainers(pod.Spec, false)
 	if len(cc) == 1 {
 		resumeShellIn(a, comp, path, cc[0])
 		return nil
@@ -169,11 +271,8 @@ func containerShellin(a *App, comp model.Component, path, co string) error {
 	picker.SetSelectedFunc(func(_ int, co, _ string, _ rune) {
 		resumeShellIn(a, comp, path, co)
 	})
-	if err := a.inject(picker); err != nil {
-		return err
-	}
 
-	return nil
+	return a.inject(picker, false)
 }
 
 func resumeShellIn(a *App, c model.Component, path, co string) {
@@ -183,11 +282,15 @@ func resumeShellIn(a *App, c model.Component, path, co string) {
 	shellIn(a, path, co)
 }
 
-func shellIn(a *App, path, co string) {
-	args := computeShellArgs(path, co, a.Conn().Config().Flags().KubeConfig)
+func shellIn(a *App, fqn, co string) {
+	os, err := getPodOS(a.factory, fqn)
+	if err != nil {
+		log.Warn().Err(err).Msgf("os detect failed")
+	}
+	args := computeShellArgs(fqn, co, a.Conn().Config().Flags().KubeConfig, os)
 
 	c := color.New(color.BgGreen).Add(color.FgBlack).Add(color.Bold)
-	if !runK(a, shellOpts{clear: true, banner: c.Sprintf(bannerFmt, path, co), args: args}) {
+	if !runK(a, shellOpts{clear: true, banner: c.Sprintf(bannerFmt, fqn, co), args: args}) {
 		a.Flash().Err(errors.New("Shell exec failed"))
 	}
 }
@@ -198,10 +301,11 @@ func containerAttachIn(a *App, comp model.Component, path, co string) error {
 		return nil
 	}
 
-	cc, err := fetchContainers(a.factory, path, false)
+	pod, err := fetchPod(a.factory, path)
 	if err != nil {
 		return err
 	}
+	cc := fetchContainers(pod.Spec, false)
 	if len(cc) == 1 {
 		resumeAttachIn(a, comp, path, cc[0])
 		return nil
@@ -211,7 +315,7 @@ func containerAttachIn(a *App, comp model.Component, path, co string) error {
 	picker.SetSelectedFunc(func(_ int, co, _ string, _ rune) {
 		resumeAttachIn(a, comp, path, co)
 	})
-	if err := a.inject(picker); err != nil {
+	if err := a.inject(picker, false); err != nil {
 		return err
 	}
 
@@ -233,8 +337,11 @@ func attachIn(a *App, path, co string) {
 	}
 }
 
-func computeShellArgs(path, co string, kcfg *string) []string {
+func computeShellArgs(path, co string, kcfg *string, os string) []string {
 	args := buildShellArgs("exec", path, co, kcfg)
+	if os == windowsOS {
+		return append(args, "--", powerShell)
+	}
 	return append(args, "--", "sh", "-c", shellCheck)
 }
 
@@ -256,24 +363,22 @@ func buildShellArgs(cmd, path, co string, kcfg *string) []string {
 	return args
 }
 
-func fetchContainers(f dao.Factory, path string, includeInit bool) ([]string, error) {
-	pod, err := fetchPod(f, path)
-	if err != nil {
-		return nil, err
-	}
-
-	nn := make([]string, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
-	for _, c := range pod.Spec.Containers {
+func fetchContainers(spec v1.PodSpec, allContainers bool) []string {
+	nn := make([]string, 0, len(spec.Containers)+len(spec.InitContainers))
+	for _, c := range spec.Containers {
 		nn = append(nn, c.Name)
 	}
-	if !includeInit {
-		return nn, nil
+	if !allContainers {
+		return nn
 	}
-	for _, c := range pod.Spec.InitContainers {
+	for _, c := range spec.InitContainers {
+		nn = append(nn, c.Name)
+	}
+	for _, c := range spec.EphemeralContainers {
 		nn = append(nn, c.Name)
 	}
 
-	return nn, nil
+	return nn
 }
 
 func fetchPod(f dao.Factory, path string) (*v1.Pod, error) {
@@ -299,6 +404,32 @@ func podIsRunning(f dao.Factory, path string) bool {
 	}
 
 	var re render.Pod
-	log.Debug().Msgf("Phase %#v", re.Phase(po))
 	return re.Phase(po) == render.Running
+}
+
+func getPodOS(f dao.Factory, fqn string) (string, error) {
+	po, err := fetchPod(f, fqn)
+	if err != nil {
+		return "", err
+	}
+	if os, ok := po.Spec.NodeSelector[osBetaSelector]; ok {
+		return os, nil
+	}
+	os, ok := po.Spec.NodeSelector[osSelector]
+	if !ok {
+		return "", fmt.Errorf("no os information available")
+	}
+
+	return os, nil
+}
+
+func resourceSorters(t *Table) ui.KeyActions {
+	return ui.KeyActions{
+		ui.KeyShiftC:   ui.NewKeyAction("Sort CPU", t.SortColCmd(cpuCol, false), false),
+		ui.KeyShiftM:   ui.NewKeyAction("Sort MEM", t.SortColCmd(memCol, false), false),
+		ui.KeyShiftX:   ui.NewKeyAction("Sort CPU/R", t.SortColCmd("%CPU/R", false), false),
+		ui.KeyShiftZ:   ui.NewKeyAction("Sort MEM/R", t.SortColCmd("%MEM/R", false), false),
+		tcell.KeyCtrlX: ui.NewKeyAction("Sort CPU/L", t.SortColCmd("%CPU/L", false), false),
+		tcell.KeyCtrlQ: ui.NewKeyAction("Sort MEM/L", t.SortColCmd("%MEM/L", false), false),
+	}
 }

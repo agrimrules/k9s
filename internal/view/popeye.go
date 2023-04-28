@@ -10,7 +10,7 @@ import (
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 )
 
 // Popeye represents a sanitizer view.
@@ -23,12 +23,11 @@ func NewPopeye(gvr client.GVR) ResourceViewer {
 	p := Popeye{
 		ResourceViewer: NewBrowser(gvr),
 	}
-	p.GetTable().SetColorerFn(render.Popeye{}.ColorerFunc())
 	p.GetTable().SetBorderFocusColor(tcell.ColorMediumSpringGreen)
-	p.GetTable().SetSelectedStyle(tcell.ColorWhite, tcell.ColorMediumSpringGreen, tcell.AttrNone)
+	p.GetTable().SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorMediumSpringGreen).Attributes(tcell.AttrNone))
 	p.GetTable().SetSortCol("SCORE%", true)
 	p.GetTable().SetDecorateFn(p.decorateRows)
-	p.SetBindKeysFn(p.bindKeys)
+	p.AddBindKeysFn(p.bindKeys)
 
 	return &p
 }
@@ -38,13 +37,12 @@ func (p *Popeye) Init(ctx context.Context) error {
 	if err := p.ResourceViewer.Init(ctx); err != nil {
 		return err
 	}
-	p.GetTable().GetModel().SetNamespace("*")
 	p.GetTable().GetModel().SetRefreshRate(5 * time.Second)
 
 	return nil
 }
 
-func (p *Popeye) decorateRows(data render.TableData) render.TableData {
+func (p *Popeye) decorateRows(data *render.TableData) {
 	var sum int
 	for _, re := range data.RowEvents {
 		n, err := strconv.Atoi(re.Row.Fields[1])
@@ -53,15 +51,18 @@ func (p *Popeye) decorateRows(data render.TableData) render.TableData {
 		}
 		sum += n
 	}
-	score := sum / len(data.RowEvents)
-	p.GetTable().Extras = fmt.Sprintf("Score %d -- %s", score, grade(score))
-	return data
+	score, letter := 0, render.NAValue
+	if len(data.RowEvents) > 0 {
+		score = sum / len(data.RowEvents)
+		letter = grade(score)
+	}
+	p.GetTable().Extras = fmt.Sprintf("Score %d -- %s", score, letter)
 }
 
 func (p *Popeye) bindKeys(aa ui.KeyActions) {
 	aa.Delete(ui.KeyShiftA, ui.KeyShiftN, tcell.KeyCtrlS, tcell.KeyCtrlSpace, ui.KeySpace)
 	aa.Add(ui.KeyActions{
-		tcell.KeyEnter: ui.NewKeyAction("Goto", p.describeCmd, true),
+		tcell.KeyEnter: ui.NewKeyAction("Goto", p.gotoCmd, true),
 		ui.KeyShiftR:   ui.NewKeyAction("Sort Resource", p.GetTable().SortColCmd("RESOURCE", true), false),
 		ui.KeyShiftS:   ui.NewKeyAction("Sort Score", p.GetTable().SortColCmd("SCORE%", true), false),
 		ui.KeyShiftO:   ui.NewKeyAction("Sort OK", p.GetTable().SortColCmd("OK", true), false),
@@ -71,16 +72,14 @@ func (p *Popeye) bindKeys(aa ui.KeyActions) {
 	})
 }
 
-func (p *Popeye) describeCmd(evt *tcell.EventKey) *tcell.EventKey {
+func (p *Popeye) gotoCmd(evt *tcell.EventKey) *tcell.EventKey {
 	path := p.GetTable().GetSelectedItem()
 	if path == "" {
 		return evt
 	}
-
 	v := NewSanitizer(client.NewGVR("sanitizer"))
 	v.SetContextFn(sanitizerCtx(path))
-
-	if err := p.App().inject(v); err != nil {
+	if err := p.App().inject(v, false); err != nil {
 		p.App().Flash().Err(err)
 	}
 

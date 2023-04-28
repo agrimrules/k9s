@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 
@@ -38,6 +39,7 @@ func NewCommand(app *App) *Command {
 func (c *Command) Init() error {
 	c.alias = dao.NewAlias(c.app.factory)
 	if _, err := c.alias.Ensure(); err != nil {
+		log.Error().Err(err).Msgf("command init failed!")
 		return err
 	}
 	customViewers = loadCustomViewers()
@@ -85,10 +87,10 @@ func (c *Command) xrayCmd(cmd string) error {
 	}
 	gvr, ok := c.alias.AsGVR(tokens[1])
 	if !ok {
-		return fmt.Errorf("Huh? `%s` command not found", cmd)
+		return fmt.Errorf("`%s` command not found", cmd)
 	}
 	if !allowedXRay(gvr) {
-		return fmt.Errorf("Huh? `%s` command not found", cmd)
+		return fmt.Errorf("`%s` command not found", cmd)
 	}
 
 	x := NewXray(gvr)
@@ -106,69 +108,79 @@ func (c *Command) xrayCmd(cmd string) error {
 	return c.exec(cmd, "xrays", x, true)
 }
 
-func (c *Command) checkAccess(gvr string) error {
-	m, err := dao.MetaAccess.MetaFor(client.NewGVR(gvr))
-	if err != nil {
-		return err
-	}
-	ns := client.CleanseNamespace(c.app.Config.ActiveNamespace())
-	if dao.IsK8sMeta(m) && c.app.ConOK() {
-		if _, e := c.app.factory.CanForResource(ns, gvr, client.MonitorAccess); e != nil {
-			return e
-		}
-	}
-	return nil
-}
-
 // Exec the Command by showing associated display.
 func (c *Command) run(cmd, path string, clearStack bool) error {
-	if c.specialCmd(cmd) {
+	if c.specialCmd(cmd, path) {
 		return nil
 	}
 	cmds := strings.Split(cmd, " ")
-	gvr, v, err := c.viewMetaFor(cmds[0])
+	command := strings.ToLower(cmds[0])
+	gvr, v, err := c.viewMetaFor(command)
 	if err != nil {
 		return err
 	}
-	if err := c.checkAccess(gvr); err != nil {
-		return err
-	}
 
-	switch cmds[0] {
+	switch command {
 	case "ctx", "context", "contexts":
 		if len(cmds) == 2 {
 			return useContext(c.app, cmds[1])
 		}
-		view := c.componentFor(gvr, path, v)
-		return c.exec(cmd, gvr, view, clearStack)
+		return c.exec(cmd, gvr, c.componentFor(gvr, path, v), clearStack)
+	case "dir":
+		if len(cmds) != 2 {
+			return errors.New("You must specify a directory")
+		}
+		return c.app.dirCmd(cmds[1])
 	default:
 		// checks if Command includes a namespace
 		ns := c.app.Config.ActiveNamespace()
 		if len(cmds) == 2 {
 			ns = cmds[1]
 		}
-		if !c.app.switchNS(ns) {
-			return fmt.Errorf("namespace switch failed for ns %q", ns)
+		if err := c.app.switchNS(ns); err != nil {
+			return err
 		}
-		if !c.alias.Check(cmds[0]) {
-			return fmt.Errorf("Huh? `%s` Command not found", cmd)
+		if !c.alias.Check(command) {
+			return fmt.Errorf("`%s` Command not found", cmd)
 		}
 		return c.exec(cmd, gvr, c.componentFor(gvr, path, v), clearStack)
 	}
 }
 
 func (c *Command) defaultCmd() error {
-	if err := c.run(c.app.Config.ActiveView(), "", true); err != nil {
-		log.Error().Err(err).Msgf("Saved command failed. Loading default view")
+	if c.app.Conn() == nil || !c.app.Conn().ConnectionOK() {
+		return c.run("context", "", true)
+	}
+	view := c.app.Config.ActiveView()
+	if view == "" {
+		return c.run("pod", "", true)
+	}
+	tokens := strings.Split(view, " ")
+	cmd := view
+	if len(tokens) == 1 {
+		if !isContextCmd(tokens[0]) {
+			cmd = tokens[0] + " " + c.app.Config.ActiveNamespace()
+		}
+	}
+
+	if err := c.run(cmd, "", true); err != nil {
+		log.Error().Err(err).Msgf("Default run command failed %q", cmd)
 		return c.run("pod", "", true)
 	}
 	return nil
 }
 
-func (c *Command) specialCmd(cmd string) bool {
+func isContextCmd(c string) bool {
+	return c == "ctx" || c == "context"
+}
+
+func (c *Command) specialCmd(cmd, path string) bool {
 	cmds := strings.Split(cmd, " ")
 	switch cmds[0] {
-	case "q", "Q", "quit":
+	case "cow":
+		c.app.cowCmd(path)
+		return true
+	case "q", "q!", "Q", "quit":
 		c.app.BailOut()
 		return true
 	case "?", "h", "help":
@@ -188,7 +200,7 @@ func (c *Command) specialCmd(cmd string) bool {
 		}
 		tokens := canRX.FindAllStringSubmatch(cmd, -1)
 		if len(tokens) == 1 && len(tokens[0]) == 3 {
-			if err := c.app.inject(NewPolicy(c.app, tokens[0][1], tokens[0][2])); err != nil {
+			if err := c.app.inject(NewPolicy(c.app, tokens[0][1], tokens[0][2]), false); err != nil {
 				log.Error().Err(err).Msgf("policy view load failed")
 				return false
 			}
@@ -201,7 +213,7 @@ func (c *Command) specialCmd(cmd string) bool {
 func (c *Command) viewMetaFor(cmd string) (string, *MetaViewer, error) {
 	gvr, ok := c.alias.AsGVR(cmd)
 	if !ok {
-		return "", nil, fmt.Errorf("Huh? `%s` command not found", cmd)
+		return "", nil, fmt.Errorf("`%s` command not found", cmd)
 	}
 
 	v, ok := customViewers[gvr]
@@ -228,23 +240,40 @@ func (c *Command) componentFor(gvr, path string, v *MetaViewer) ResourceViewer {
 	return view
 }
 
-func (c *Command) exec(cmd, gvr string, comp model.Component, clearStack bool) error {
+func (c *Command) exec(cmd, gvr string, comp model.Component, clearStack bool) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			log.Error().Msgf("Something bad happened! %#v", e)
+			c.app.Content.Dump()
+			log.Debug().Msgf("History %v", c.app.cmdHistory.List())
+			log.Error().Msg(string(debug.Stack()))
+
+			hh := c.app.cmdHistory.List()
+			if len(hh) == 0 {
+				_ = c.run("pod", "", true)
+			} else {
+				_ = c.run(hh[0], "", true)
+			}
+			err = fmt.Errorf("Invalid command %q", cmd)
+		}
+	}()
+
 	if comp == nil {
 		return fmt.Errorf("No component found for %s", gvr)
 	}
 	c.app.Flash().Infof("Viewing %s...", client.NewGVR(gvr).R())
+	if tokens := strings.Split(cmd, " "); len(tokens) >= 2 {
+		cmd = tokens[0]
+	}
 	c.app.Config.SetActiveView(cmd)
 	if err := c.app.Config.Save(); err != nil {
 		log.Error().Err(err).Msg("Config save failed!")
 	}
-	if clearStack {
-		c.app.Content.Stack.Clear()
-	}
-
-	if err := c.app.inject(comp); err != nil {
+	if err := c.app.inject(comp, clearStack); err != nil {
 		return err
 	}
+
 	c.app.cmdHistory.Push(cmd)
 
-	return nil
+	return
 }

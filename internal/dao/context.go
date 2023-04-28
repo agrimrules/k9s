@@ -7,7 +7,6 @@ import (
 	"github.com/derailed/k9s/internal/render"
 	"github.com/rs/zerolog/log"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 var (
@@ -15,13 +14,13 @@ var (
 	_ Switchable = (*Context)(nil)
 )
 
-// Context represents a kubenetes context.
+// Context represents a kubernetes context.
 type Context struct {
 	NonResource
 }
 
 func (c *Context) config() *client.Config {
-	return c.Factory.Client().Config()
+	return c.GetFactory().Client().Config()
 }
 
 // Get a Context.
@@ -58,19 +57,5 @@ func (c *Context) MustCurrentContextName() string {
 
 // Switch to another context.
 func (c *Context) Switch(ctx string) error {
-	return c.Factory.Client().SwitchContext(ctx)
-}
-
-// KubeUpdate modifies kubeconfig default context.
-func (c *Context) KubeUpdate(n string) error {
-	config, err := c.config().RawConfig()
-	if err != nil {
-		return err
-	}
-	if err := c.Switch(n); err != nil {
-		return err
-	}
-	return clientcmd.ModifyConfig(
-		clientcmd.NewDefaultPathOptions(), config, true,
-	)
+	return c.GetFactory().Client().SwitchContext(ctx)
 }

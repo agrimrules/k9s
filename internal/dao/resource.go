@@ -30,24 +30,24 @@ func (r *Resource) List(ctx context.Context, ns string) ([]runtime.Object, error
 		}
 	}
 
-	return r.Factory.List(r.gvr.String(), ns, false, lsel)
+	return r.GetFactory().List(r.gvr.String(), ns, false, lsel)
 }
 
 // Get returns a resource instance if found, else an error.
 func (r *Resource) Get(_ context.Context, path string) (runtime.Object, error) {
-	return r.Factory.Get(r.gvr.String(), path, true, labels.Everything())
+	return r.GetFactory().Get(r.gvr.String(), path, true, labels.Everything())
 }
 
 // ToYAML returns a resource yaml.
-func (r *Resource) ToYAML(path string) (string, error) {
+func (r *Resource) ToYAML(path string, showManaged bool) (string, error) {
 	o, err := r.Get(context.Background(), path)
 	if err != nil {
 		return "", err
 	}
 
-	raw, err := ToYAML(o)
+	raw, err := ToYAML(o, showManaged)
 	if err != nil {
-		return "", fmt.Errorf("unable to marshal resource %s", err)
+		return "", fmt.Errorf("unable to marshal resource %w", err)
 	}
 	return raw, nil
 }

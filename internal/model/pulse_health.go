@@ -3,13 +3,13 @@ package model
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/dao"
 	"github.com/derailed/k9s/internal/health"
 	"github.com/derailed/k9s/internal/render"
 	"github.com/rs/zerolog/log"
+	metav1beta1 "k8s.io/apimachinery/pkg/apis/meta/v1beta1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -27,10 +27,6 @@ func NewPulseHealth(f dao.Factory) *PulseHealth {
 
 // List returns a canned collection of resources health.
 func (h *PulseHealth) List(ctx context.Context, ns string) ([]runtime.Object, error) {
-	defer func(t time.Time) {
-		log.Debug().Msgf("PulseHealthCheck %v", time.Since(t))
-	}(time.Now())
-
 	gvrs := []string{
 		"v1/pods",
 		"v1/events",
@@ -53,7 +49,7 @@ func (h *PulseHealth) List(ctx context.Context, ns string) ([]runtime.Object, er
 
 	mm, err := h.checkMetrics(ctx)
 	if err != nil {
-		return hh, nil
+		return hh, err
 	}
 	for _, m := range mm {
 		hh = append(hh, m)
@@ -103,7 +99,10 @@ func (h *PulseHealth) checkMetrics(ctx context.Context) (health.Checks, error) {
 func (h *PulseHealth) check(ctx context.Context, ns, gvr string) (*health.Check, error) {
 	meta, ok := Registry[gvr]
 	if !ok {
-		return nil, fmt.Errorf("No meta for %q", gvr)
+		meta = ResourceMeta{
+			DAO:      &dao.Table{},
+			Renderer: &render.Generic{},
+		}
 	}
 	if meta.DAO == nil {
 		meta.DAO = &dao.Resource{}
@@ -114,8 +113,29 @@ func (h *PulseHealth) check(ctx context.Context, ns, gvr string) (*health.Check,
 	if err != nil {
 		return nil, err
 	}
-
 	c := health.NewCheck(gvr)
+
+	if meta.Renderer.IsGeneric() {
+		table, ok := oo[0].(*metav1beta1.Table)
+		if !ok {
+			return nil, fmt.Errorf("expecting a meta table but got %T", oo[0])
+		}
+		rows := make(render.Rows, len(table.Rows))
+		re, _ := meta.Renderer.(Generic)
+		re.SetTable(ns, table)
+		for i, row := range table.Rows {
+			if err := re.Render(row, ns, &rows[i]); err != nil {
+				return nil, err
+			}
+			if !render.Happy(ns, re.Header(ns), rows[i]) {
+				c.Inc(health.S2)
+				continue
+			}
+			c.Inc(health.S1)
+		}
+		c.Total(int64(len(table.Rows)))
+		return c, nil
+	}
 	c.Total(int64(len(oo)))
 	rr, re := make(render.Rows, len(oo)), meta.Renderer
 	for i, o := range oo {
@@ -124,9 +144,9 @@ func (h *PulseHealth) check(ctx context.Context, ns, gvr string) (*health.Check,
 		}
 		if !render.Happy(ns, re.Header(ns), rr[i]) {
 			c.Inc(health.S2)
-		} else {
-			c.Inc(health.S1)
+			continue
 		}
+		c.Inc(health.S1)
 	}
 
 	return c, nil

@@ -4,8 +4,8 @@ import (
 	"image"
 	"sync"
 
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
 )
 
 const (
@@ -64,6 +64,7 @@ func (c *Component) SetLegend(l string) {
 // InputHandler returns the handler for this primitive.
 func (c *Component) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
 	return c.WrapInputHandler(func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+		// nolint:exhaustive
 		switch key := event.Key(); key {
 		case tcell.KeyEnter:
 		case tcell.KeyBacktab, tcell.KeyTab:
@@ -75,7 +76,7 @@ func (c *Component) InputHandler() func(event *tcell.EventKey, setFocus func(p t
 	})
 }
 
-// IsDial returns true if chart is a dial
+// IsDial returns true if chart is a dial.
 func (c *Component) IsDial() bool {
 	return false
 }

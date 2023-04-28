@@ -4,8 +4,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/derailed/k9s/internal/dao"
 	"github.com/derailed/k9s/internal/model"
 	"github.com/derailed/k9s/internal/render"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -39,12 +41,6 @@ type Namespaceable interface {
 type Lister interface {
 	// Get returns a resource instance.
 	Get(ctx context.Context, path string) (runtime.Object, error)
-
-	// ToYAML returns a resource yaml representation.
-	ToYAML(ctx context.Context, path string) (string, error)
-
-	// Describes describes a given resource.
-	Describe(ctx context.Context, path string) (string, error)
 }
 
 // Tabular represents a tabular model.
@@ -55,14 +51,23 @@ type Tabular interface {
 	// SetInstance sets parent resource path.
 	SetInstance(string)
 
+	// SetLabelFilter sets the label filter.
+	SetLabelFilter(string)
+
 	// Empty returns true if model has no data.
 	Empty() bool
 
+	// Count returns the model data count.
+	Count() int
+
 	// Peek returns current model data.
-	Peek() render.TableData
+	Peek() *render.TableData
 
 	// Watch watches a given resource for changes.
-	Watch(context.Context)
+	Watch(context.Context) error
+
+	// Refresh forces a new refresh.
+	Refresh(context.Context) error
 
 	// SetRefreshRate sets the model watch loop rate.
 	SetRefreshRate(time.Duration)
@@ -70,6 +75,9 @@ type Tabular interface {
 	// AddListener registers a model listener.
 	AddListener(model.TableListener)
 
+	// RemoveListener unregister a model listener.
+	RemoveListener(model.TableListener)
+
 	// Delete a resource.
-	Delete(ctx context.Context, path string, cascade, force bool) error
+	Delete(context.Context, string, *metav1.DeletionPropagation, dao.Grace) error
 }

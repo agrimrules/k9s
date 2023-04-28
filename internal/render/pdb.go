@@ -13,11 +13,8 @@ import (
 )
 
 // PodDisruptionBudget renders a K8s PodDisruptionBudget to screen.
-type PodDisruptionBudget struct{}
-
-// ColorerFunc colors a resource row.
-func (p PodDisruptionBudget) ColorerFunc() ColorerFunc {
-	return DefaultColorer
+type PodDisruptionBudget struct {
+	Base
 }
 
 // Header returns a header row.
@@ -33,7 +30,7 @@ func (PodDisruptionBudget) Header(ns string) Header {
 		HeaderColumn{Name: "EXPECTED", Align: tview.AlignRight},
 		HeaderColumn{Name: "LABELS", Wide: true},
 		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		HeaderColumn{Name: "AGE", Time: true},
 	}
 }
 
@@ -61,7 +58,7 @@ func (p PodDisruptionBudget) Render(o interface{}, ns string, r *Row) error {
 		strconv.Itoa(int(pdb.Status.ExpectedPods)),
 		mapToStr(pdb.Labels),
 		asStatus(p.diagnose(pdb.Spec.MinAvailable, pdb.Status.CurrentHealthy)),
-		toAge(pdb.ObjectMeta.CreationTimestamp),
+		toAge(pdb.GetCreationTimestamp()),
 	}
 
 	return nil
@@ -83,5 +80,8 @@ func numbToStr(n *intstr.IntOrString) string {
 	if n == nil {
 		return NAValue
 	}
-	return strconv.Itoa(int(n.IntVal))
+	if n.Type == intstr.Int {
+		return strconv.Itoa(int(n.IntVal))
+	}
+	return n.StrVal
 }

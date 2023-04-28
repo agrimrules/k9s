@@ -26,7 +26,7 @@ func TestPortForwardRender(t *testing.T) {
 		"blee",
 		"fred",
 		"co",
-		"p1",
+		"p1:p2",
 		"http://0.0.0.0:p1/",
 		"1",
 		"1",
@@ -39,6 +39,10 @@ func TestPortForwardRender(t *testing.T) {
 
 type fwd struct{}
 
+func (f fwd) ID() string {
+	return "blee/fred"
+}
+
 func (f fwd) Path() string {
 	return "blee/fred"
 }
@@ -47,8 +51,8 @@ func (f fwd) Container() string {
 	return "co"
 }
 
-func (f fwd) Ports() []string {
-	return []string{"p1"}
+func (f fwd) Port() string {
+	return "p1:p2"
 }
 
 func (f fwd) Active() bool {

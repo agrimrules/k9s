@@ -2,14 +2,14 @@ package view
 
 import (
 	"context"
+	"strings"
 	"time"
 
-	"github.com/atotto/clipboard"
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/model"
 	"github.com/derailed/k9s/internal/ui"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 	"github.com/rs/zerolog/log"
 )
 
@@ -20,7 +20,7 @@ type Table struct {
 	app        *App
 	enterFn    EnterFunc
 	envFn      EnvFunc
-	bindKeysFn BindKeysFunc
+	bindKeysFn []BindKeysFunc
 }
 
 // NewTable returns a new viewer.
@@ -33,7 +33,7 @@ func NewTable(gvr client.GVR) *Table {
 	return &t
 }
 
-// Init initializes the component
+// Init initializes the component.
 func (t *Table) Init(ctx context.Context) (err error) {
 	if t.app, err = extractApp(ctx); err != nil {
 		return err
@@ -50,6 +50,24 @@ func (t *Table) Init(ctx context.Context) (err error) {
 	t.CmdBuff().AddListener(t)
 
 	return nil
+}
+
+// HeaderIndex returns index of a given column or false if not found.
+func (t *Table) HeaderIndex(colName string) (int, bool) {
+	for i := 0; i < t.GetColumnCount(); i++ {
+		h := t.GetCell(0, i)
+		if h == nil {
+			continue
+		}
+		s := h.Text
+		if idx := strings.Index(s, "["); idx > 0 {
+			s = s[:idx]
+		}
+		if s == colName {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // SendKey sends an keyboard event (testing only!).
@@ -73,8 +91,10 @@ func (t *Table) keyboard(evt *tcell.EventKey) *tcell.EventKey {
 // Name returns the table name.
 func (t *Table) Name() string { return t.GVR().R() }
 
-// SetBindKeysFn adds additional key bindings.
-func (t *Table) SetBindKeysFn(f BindKeysFunc) { t.bindKeysFn = f }
+// AddBindKeysFn adds additional key bindings.
+func (t *Table) AddBindKeysFn(f BindKeysFunc) {
+	t.bindKeysFn = append(t.bindKeysFn, f)
+}
 
 // SetEnvFn sets a function to pull viewer env vars for plugins.
 func (t *Table) SetEnvFn(f EnvFunc) { t.envFn = f }
@@ -95,6 +115,9 @@ func (t *Table) defaultEnv() Env {
 	if env["FILTER"] == "" {
 		env["NAMESPACE"], env["FILTER"] = client.Namespaced(path)
 	}
+	env["RESOURCE_GROUP"] = t.GVR().G()
+	env["RESOURCE_VERSION"] = t.GVR().V()
+	env["RESOURCE_NAME"] = t.GVR().R()
 
 	return env
 }
@@ -125,10 +148,15 @@ func (t *Table) SetEnterFn(f EnterFunc) {
 // SetExtraActionsFn specifies custom keyboard behavior.
 func (t *Table) SetExtraActionsFn(BoostActionsFunc) {}
 
-// BufferChanged indicates the buffer was changed.
-func (t *Table) BufferChanged(s string) {
-	t.Filter(s)
+// BufferCompleted indicates input was accepted.
+func (t *Table) BufferCompleted(text, _ string) {
+	t.app.QueueUpdateDraw(func() {
+		t.Filter(text)
+	})
 }
+
+// BufferChanged indicates the buffer was changed.
+func (t *Table) BufferChanged(_, _ string) {}
 
 // BufferActive indicates the buff activity changed.
 func (t *Table) BufferActive(state bool, k model.BufferKind) {
@@ -139,7 +167,7 @@ func (t *Table) BufferActive(state bool, k model.BufferKind) {
 }
 
 func (t *Table) saveCmd(evt *tcell.EventKey) *tcell.EventKey {
-	if path, err := saveTable(t.app.Config.K9s.CurrentCluster, t.GVR().R(), t.Path, t.GetFilteredData()); err != nil {
+	if path, err := saveTable(t.app.Config.K9s.GetScreenDumpDir(), t.app.Config.K9s.CurrentContextDir(), t.GVR().R(), t.Path, t.GetFilteredData()); err != nil {
 		t.app.Flash().Err(err)
 	} else {
 		t.app.Flash().Infof("File %s saved successfully!", path)
@@ -150,14 +178,16 @@ func (t *Table) saveCmd(evt *tcell.EventKey) *tcell.EventKey {
 
 func (t *Table) bindKeys() {
 	t.Actions().Add(ui.KeyActions{
-		ui.KeySpace:        ui.NewSharedKeyAction("Mark", t.markCmd, false),
-		tcell.KeyCtrlSpace: ui.NewSharedKeyAction("Marks Clear", t.clearMarksCmd, false),
-		tcell.KeyCtrlS:     ui.NewSharedKeyAction("Save", t.saveCmd, false),
-		ui.KeySlash:        ui.NewSharedKeyAction("Filter Mode", t.activateCmd, false),
-		tcell.KeyCtrlZ:     ui.NewKeyAction("Toggle Faults", t.toggleFaultCmd, false),
-		tcell.KeyCtrlW:     ui.NewKeyAction("Toggle Wide", t.toggleWideCmd, false),
-		ui.KeyShiftN:       ui.NewKeyAction("Sort Name", t.SortColCmd(nameCol, true), false),
-		ui.KeyShiftA:       ui.NewKeyAction("Sort Age", t.SortColCmd(ageCol, true), false),
+		ui.KeyHelp:             ui.NewKeyAction("Help", t.App().helpCmd, true),
+		ui.KeySpace:            ui.NewSharedKeyAction("Mark", t.markCmd, false),
+		tcell.KeyCtrlSpace:     ui.NewSharedKeyAction("Mark Range", t.markSpanCmd, false),
+		tcell.KeyCtrlBackslash: ui.NewSharedKeyAction("Marks Clear", t.clearMarksCmd, false),
+		tcell.KeyCtrlS:         ui.NewSharedKeyAction("Save", t.saveCmd, false),
+		ui.KeySlash:            ui.NewSharedKeyAction("Filter Mode", t.activateCmd, false),
+		tcell.KeyCtrlZ:         ui.NewKeyAction("Toggle Faults", t.toggleFaultCmd, false),
+		tcell.KeyCtrlW:         ui.NewKeyAction("Toggle Wide", t.toggleWideCmd, false),
+		ui.KeyShiftN:           ui.NewKeyAction("Sort Name", t.SortColCmd(nameCol, true), false),
+		ui.KeyShiftA:           ui.NewKeyAction("Sort Age", t.SortColCmd(ageCol, true), false),
 	})
 }
 
@@ -176,34 +206,33 @@ func (t *Table) cpCmd(evt *tcell.EventKey) *tcell.EventKey {
 	if path == "" {
 		return evt
 	}
-
 	_, n := client.Namespaced(path)
-	log.Debug().Msgf("Copied selection to clipboard %q", n)
-	t.app.Flash().Info("Current selection copied to clipboard...")
-	if err := clipboard.WriteAll(n); err != nil {
+	if err := clipboardWrite(n); err != nil {
 		t.app.Flash().Err(err)
+		return nil
 	}
+	t.app.Flash().Info("Current selection copied to clipboard...")
 
 	return nil
 }
 
 func (t *Table) markCmd(evt *tcell.EventKey) *tcell.EventKey {
-	path := t.GetSelectedItem()
-	if path == "" {
-		return evt
-	}
 	t.ToggleMark()
 	t.Refresh()
 
 	return nil
 }
 
+func (t *Table) markSpanCmd(evt *tcell.EventKey) *tcell.EventKey {
+	t.SpanMark()
+	t.Refresh()
+
+	return nil
+}
+
 func (t *Table) clearMarksCmd(evt *tcell.EventKey) *tcell.EventKey {
-	path := t.GetSelectedItem()
-	if path == "" {
-		return evt
-	}
 	t.ClearMarks()
+	t.Refresh()
 
 	return nil
 }
@@ -214,5 +243,5 @@ func (t *Table) activateCmd(evt *tcell.EventKey) *tcell.EventKey {
 	}
 	t.App().ResetPrompt(t.CmdBuff())
 
-	return nil
+	return evt
 }

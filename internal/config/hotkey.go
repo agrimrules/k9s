@@ -1,14 +1,14 @@
 package config
 
 import (
-	"io/ioutil"
+	"os"
 	"path/filepath"
 
 	"gopkg.in/yaml.v2"
 )
 
 // K9sHotKeys manages K9s hotKeys.
-var K9sHotKeys = filepath.Join(K9sHome, "hotkey.yml")
+var K9sHotKeys = filepath.Join(K9sHome(), "hotkey.yml")
 
 // HotKeys represents a collection of plugins.
 type HotKeys struct {
@@ -36,7 +36,7 @@ func (h HotKeys) Load() error {
 
 // LoadHotKeys loads plugins from a given file.
 func (h HotKeys) LoadHotKeys(path string) error {
-	f, err := ioutil.ReadFile(path)
+	f, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}

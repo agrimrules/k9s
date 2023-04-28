@@ -1,7 +1,7 @@
 package config
 
 import (
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -10,7 +10,7 @@ import (
 )
 
 // K9sAlias manages K9s aliases.
-var K9sAlias = filepath.Join(K9sHome, "alias.yml")
+var K9sAlias = filepath.Join(K9sHome(), "alias.yml")
 
 // Alias tracks shortname to GVR mappings.
 type Alias map[string]string
@@ -50,8 +50,8 @@ func (a *Aliases) ShortNames() ShortNames {
 
 	m := make(ShortNames, len(a.Alias))
 	for alias, gvr := range a.Alias {
-		if _, ok := m[gvr]; ok {
-			m[gvr] = append(m[gvr], alias)
+		if v, ok := m[gvr]; ok {
+			m[gvr] = append(v, alias)
 		} else {
 			m[gvr] = []string{alias}
 		}
@@ -84,6 +84,11 @@ func (a *Aliases) Define(gvr string, aliases ...string) {
 	a.mx.Lock()
 	defer a.mx.Unlock()
 
+	// BOZO!! Could not get full events struct using this api group??
+	if gvr == "events.k8s.io/v1/events" || gvr == "extensions/v1beta1" {
+		return
+	}
+
 	for _, alias := range aliases {
 		if _, ok := a.Alias[alias]; ok {
 			continue
@@ -100,20 +105,18 @@ func (a *Aliases) Load() error {
 
 // LoadFileAliases loads alias from a given file.
 func (a *Aliases) LoadFileAliases(path string) error {
-	f, err := ioutil.ReadFile(path)
-	if err != nil {
-		return nil
-	}
+	f, err := os.ReadFile(path)
+	if err == nil {
+		var aa Aliases
+		if err := yaml.Unmarshal(f, &aa); err != nil {
+			return err
+		}
 
-	var aa Aliases
-	if err := yaml.Unmarshal(f, &aa); err != nil {
-		return err
-	}
-
-	a.mx.Lock()
-	defer a.mx.Unlock()
-	for k, v := range aa.Alias {
-		a.Alias[k] = v
+		a.mx.Lock()
+		defer a.mx.Unlock()
+		for k, v := range aa.Alias {
+			a.Alias[k] = v
+		}
 	}
 
 	return nil
@@ -140,15 +143,16 @@ func (a *Aliases) loadDefaultAliases() {
 	a.Alias["np"] = "networking.k8s.io/v1/networkpolicies"
 
 	a.declare("help", "h", "?")
-	a.declare("quit", "q", "Q")
+	a.declare("quit", "q", "q!", "Q")
 	a.declare("aliases", "alias", "a")
 	a.declare("popeye", "pop")
 	a.declare("helm", "charts", "chart", "hm")
+	a.declare("dir", "d")
 	a.declare("contexts", "context", "ctx")
 	a.declare("users", "user", "usr")
 	a.declare("groups", "group", "grp")
 	a.declare("portforwards", "portforward", "pf")
-	a.declare("benchmarks", "benchmark", "be")
+	a.declare("benchmarks", "bench", "benchmark", "be")
 	a.declare("screendumps", "screendump", "sd")
 	a.declare("pulses", "pulse", "pu", "hz")
 	a.declare("xrays", "xray", "x")
@@ -162,10 +166,12 @@ func (a *Aliases) Save() error {
 
 // SaveAliases saves aliases to a given file.
 func (a *Aliases) SaveAliases(path string) error {
-	EnsurePath(path, DefaultDirMod)
+	if err := EnsureDirPath(path, DefaultDirMod); err != nil {
+		return err
+	}
 	cfg, err := yaml.Marshal(a)
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(path, cfg, 0644)
+	return os.WriteFile(path, cfg, 0644)
 }

@@ -44,6 +44,13 @@ func NewMenu(styles *config.Styles) *Menu {
 func (m *Menu) StylesChanged(s *config.Styles) {
 	m.styles = s
 	m.SetBackgroundColor(s.BgColor())
+	for row := 0; row < m.GetRowCount(); row++ {
+		for col := 0; col < m.GetColumnCount(); col++ {
+			if c := m.GetCell(row, col); c != nil {
+				c.BackgroundColor = s.BgColor()
+			}
+		}
+	}
 }
 
 // StackPushed notifies a component was added.
@@ -144,7 +151,6 @@ func (m *Menu) layout(table []model.MenuHints, mm []int, out [][]string) {
 			out[r][c] = keyConv(m.formatMenu(table[r][c], mm[c]))
 		}
 	}
-
 }
 
 func (m *Menu) formatMenu(h model.MenuHint, size int) string {

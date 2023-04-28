@@ -2,10 +2,12 @@ package view
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/ui"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/k9s/internal/ui/dialog"
+	"github.com/derailed/tcell/v2"
 	"github.com/rs/zerolog/log"
 )
 
@@ -65,7 +67,7 @@ func hotKeyActions(r Runner, aa ui.KeyActions) {
 		}
 		_, ok := aa[key]
 		if ok {
-			log.Warn().Err(fmt.Errorf("HOT-KEY Doh! you are trying to overide an existing command `%s", k)).Msg("Invalid shortcut")
+			log.Warn().Err(fmt.Errorf("HOT-KEY Doh! you are trying to override an existing command `%s", k)).Msg("Invalid shortcut")
 			continue
 		}
 		aa[key] = ui.NewSharedKeyAction(
@@ -77,10 +79,7 @@ func hotKeyActions(r Runner, aa ui.KeyActions) {
 
 func gotoCmd(r Runner, cmd, path string) ui.ActionHandler {
 	return func(evt *tcell.EventKey) *tcell.EventKey {
-		if err := r.App().gotoResource(cmd, path, true); err != nil {
-			log.Error().Err(err).Msgf("Command fail")
-			r.App().Flash().Err(err)
-		}
+		r.App().gotoResource(cmd, path, true)
 		return nil
 	}
 }
@@ -102,41 +101,56 @@ func pluginActions(r Runner, aa ui.KeyActions) {
 		}
 		_, ok := aa[key]
 		if ok {
-			log.Warn().Err(fmt.Errorf("Doh! you are trying to overide an existing command `%s", k)).Msg("Invalid shortcut")
+			log.Warn().Err(fmt.Errorf("Doh! you are trying to override an existing command `%s", k)).Msg("Invalid shortcut")
 			continue
 		}
 		aa[key] = ui.NewKeyAction(
 			plugin.Description,
-			execCmd(r, plugin.Command, plugin.Background, plugin.Args...),
+			pluginAction(r, plugin),
 			true)
 	}
 }
 
-func execCmd(r Runner, bin string, bg bool, args ...string) ui.ActionHandler {
+func pluginAction(r Runner, p config.Plugin) ui.ActionHandler {
 	return func(evt *tcell.EventKey) *tcell.EventKey {
 		path := r.GetSelectedItem()
 		if path == "" {
 			return evt
 		}
-
 		if r.EnvFn() == nil {
 			return nil
 		}
 
-		aa := make([]string, len(args))
-		for i, a := range args {
+		args := make([]string, len(p.Args))
+		for i, a := range p.Args {
 			arg, err := r.EnvFn()().Substitute(a)
 			if err != nil {
 				log.Error().Err(err).Msg("Plugin Args match failed")
 				return nil
 			}
-			aa[i] = arg
+			args[i] = arg
 		}
-		if run(r.App(), shellOpts{clear: true, binary: bin, background: bg, args: aa}) {
-			r.App().Flash().Info("Plugin command launched successfully!")
-		} else {
+
+		cb := func() {
+			opts := shellOpts{
+				clear:      true,
+				binary:     p.Command,
+				background: p.Background,
+				pipes:      p.Pipes,
+				args:       args,
+			}
+			if run(r.App(), opts) {
+				r.App().Flash().Info("Plugin command launched successfully!")
+				return
+			}
 			r.App().Flash().Info("Plugin command failed!")
 		}
+		if p.Confirm {
+			msg := fmt.Sprintf("Run?\n%s %s", p.Command, strings.Join(args, " "))
+			dialog.ShowConfirm(r.App().Styles.Dialog(), r.App().Content.Pages, "Confirm "+p.Description, msg, cb, func() {})
+			return nil
+		}
+		cb()
 
 		return nil
 	}

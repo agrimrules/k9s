@@ -11,9 +11,11 @@ import (
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/model"
 	"github.com/derailed/k9s/internal/render"
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 type (
@@ -21,7 +23,7 @@ type (
 	ColorerFunc func(ns string, evt render.RowEvent) tcell.Color
 
 	// DecorateFunc represents a row decorator.
-	DecorateFunc func(render.TableData) render.TableData
+	DecorateFunc func(*render.TableData)
 
 	// SelectedRowFunc a table selection callback.
 	SelectedRowFunc func(r int)
@@ -29,21 +31,20 @@ type (
 
 // Table represents tabular data.
 type Table struct {
+	gvr     client.GVR
+	sortCol SortColumn
+	header  render.Header
+	Path    string
+	Extras  string
 	*SelectTable
-
 	actions     KeyActions
-	gvr         client.GVR
-	Path        string
-	Extras      string
 	cmdBuff     *model.FishBuff
 	styles      *config.Styles
 	viewSetting *config.ViewSetting
-	sortCol     SortColumn
 	colorerFn   render.ColorerFunc
 	decorateFn  DecorateFunc
 	wide        bool
 	toast       bool
-	header      render.Header
 	hasMetrics  bool
 }
 
@@ -72,11 +73,6 @@ func (t *Table) Init(ctx context.Context) {
 	t.SetSelectionChangedFunc(t.selectionChanged)
 	t.SetBackgroundColor(tcell.ColorDefault)
 	t.Select(1, 0)
-	t.hasMetrics = false
-	if mx, ok := ctx.Value(internal.KeyHasMetrics).(bool); ok {
-		t.hasMetrics = mx
-	}
-
 	if cfg, ok := ctx.Value(internal.KeyViewConfig).(*config.CustomView); ok && cfg != nil {
 		cfg.AddListener(t.GVR().String(), t)
 	}
@@ -96,13 +92,10 @@ func (t *Table) ViewSettingsChanged(settings config.ViewSetting) {
 // StylesChanged notifies the skin changed.
 func (t *Table) StylesChanged(s *config.Styles) {
 	t.SetBackgroundColor(s.Table().BgColor.Color())
-	t.SetBorderColor(s.Table().FgColor.Color())
+	t.SetBorderColor(s.Frame().Border.FgColor.Color())
 	t.SetBorderFocusColor(s.Frame().Border.FocusColor.Color())
-	t.SetSelectedStyle(
-		tcell.ColorBlack,
-		t.styles.Table().CursorColor.Color(),
-		tcell.AttrBold,
-	)
+	t.SetSelectedStyle(tcell.StyleDefault.Foreground(t.styles.Table().CursorFgColor.Color()).Background(t.styles.Table().CursorBgColor.Color()).Attributes(tcell.AttrBold))
+	t.fgColor = s.Table().CursorFgColor.Color()
 	t.Refresh()
 }
 
@@ -167,7 +160,7 @@ func (t *Table) ExtraHints() map[string]string {
 }
 
 // GetFilteredData fetch filtered tabular data.
-func (t *Table) GetFilteredData() render.TableData {
+func (t *Table) GetFilteredData() *render.TableData {
 	return t.filtered(t.GetModel().Peek())
 }
 
@@ -187,33 +180,47 @@ func (t *Table) SetSortCol(name string, asc bool) {
 }
 
 // Update table content.
-func (t *Table) Update(data render.TableData) {
+func (t *Table) Update(data *render.TableData, hasMetrics bool) {
 	t.header = data.Header
 	if t.decorateFn != nil {
-		data = t.decorateFn(data)
+		t.decorateFn(data)
 	}
+	t.hasMetrics = hasMetrics
 	t.doUpdate(t.filtered(data))
 	t.UpdateTitle()
 }
 
-func (t *Table) doUpdate(data render.TableData) {
+func (t *Table) doUpdate(data *render.TableData) {
 	if client.IsAllNamespaces(data.Namespace) {
 		t.actions[KeyShiftP] = NewKeyAction("Sort Namespace", t.SortColCmd("NAMESPACE", true), false)
 	} else {
 		t.actions.Delete(KeyShiftP)
 	}
 
-	var cols []string
-	if t.viewSetting != nil {
+	cols := t.header.Columns(t.wide)
+	if t.viewSetting != nil && len(t.viewSetting.Columns) > 0 {
 		cols = t.viewSetting.Columns
 	}
-	if len(cols) == 0 {
-		cols = t.header.Columns(t.wide)
-	}
 	custData := data.Customize(cols, t.wide)
+	if t.viewSetting != nil && t.viewSetting.SortColumn != "" {
+		tokens := strings.Split(t.viewSetting.SortColumn, ":")
+		if custData.Header.IndexOf(tokens[0], false) >= 0 && custData.Header.IndexOf(t.sortCol.name, false) < 0 {
+			t.sortCol.name, t.sortCol.asc = tokens[0], true
+			if len(tokens) == 2 && tokens[1] == "desc" {
+				t.sortCol.asc = false
+			}
+		}
+	}
 
-	if (t.sortCol.name == "" || custData.Header.IndexOf(t.sortCol.name, false) == -1) && len(custData.Header) > 0 && t.sortCol.name != "NONE" {
-		t.sortCol.name = custData.Header[0].Name
+	if t.sortCol.name == "" && client.IsAllNamespaces(data.Namespace) {
+		t.sortCol.name = "NAMESPACE"
+	}
+	if t.sortCol.name == "" || (t.sortCol.name == "NAMESPACE" && !client.IsAllNamespaces(data.Namespace)) && len(custData.Header) > 0 {
+		if idx := custData.Header.IndexOf("NAME", false); idx >= 0 {
+			t.sortCol.name = custData.Header[idx].Name
+		} else {
+			t.sortCol.name = custData.Header[0].Name
+		}
 	}
 
 	t.Clear()
@@ -234,10 +241,12 @@ func (t *Table) doUpdate(data render.TableData) {
 		c.SetTextColor(fg)
 		col++
 	}
+	colIndex := custData.Header.IndexOf(t.sortCol.name, false)
 	custData.RowEvents.Sort(
 		custData.Namespace,
-		custData.Header.IndexOf(t.sortCol.name, false),
-		t.sortCol.name == "AGE",
+		colIndex,
+		custData.Header.IsTimeCol(colIndex),
+		custData.Header.IsMetricsCol(colIndex),
 		t.sortCol.asc,
 	)
 
@@ -271,7 +280,7 @@ func (t *Table) buildRow(r int, re, ore render.RowEvent, h render.Header, pads M
 			continue
 		}
 
-		if !re.Deltas.IsBlank() && !h.IsAgeCol(c) {
+		if !re.Deltas.IsBlank() && !h.IsTimeCol(c) {
 			field += Deltas(re.Deltas[c], field)
 		}
 
@@ -332,7 +341,7 @@ func (t *Table) Refresh() {
 		return
 	}
 	// BOZO!! Really want to tell model reload now. Refactor!
-	t.Update(data)
+	t.Update(data, t.hasMetrics)
 }
 
 // GetSelectedRow returns the entire selected row.
@@ -366,7 +375,7 @@ func (t *Table) AddHeaderCell(col int, h render.HeaderColumn) {
 	t.SetCell(0, col, c)
 }
 
-func (t *Table) filtered(data render.TableData) render.TableData {
+func (t *Table) filtered(data *render.TableData) *render.TableData {
 	filtered := data
 	if t.toast {
 		filtered = filterToast(data)
@@ -380,10 +389,10 @@ func (t *Table) filtered(data render.TableData) render.TableData {
 		return fuzzyFilter(q[2:], filtered)
 	}
 
-	filtered, err := rxFilter(t.cmdBuff.GetText(), filtered)
+	filtered, err := rxFilter(q, IsInverseSelector(q), filtered)
 	if err != nil {
 		log.Error().Err(errors.New("Invalid filter expression")).Msg("Regexp")
-		t.cmdBuff.ClearText()
+		// t.cmdBuff.ClearText(true)
 	}
 
 	return filtered
@@ -414,7 +423,7 @@ func (t *Table) styleTitle() string {
 		rc--
 	}
 
-	base := strings.Title(t.gvr.R())
+	base := cases.Title(language.Und, cases.NoLower).String(t.gvr.R())
 	ns := t.GetModel().GetNamespace()
 	if client.IsClusterWide(ns) || ns == client.NotNamespaced {
 		ns = client.NamespaceAll

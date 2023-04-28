@@ -3,7 +3,6 @@ package view
 import (
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/dao"
-	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
 )
 
@@ -17,13 +16,14 @@ func NewDaemonSet(gvr client.GVR) ResourceViewer {
 	d := DaemonSet{
 		ResourceViewer: NewPortForwardExtender(
 			NewRestartExtender(
-				NewLogsExtender(NewBrowser(gvr), nil),
+				NewImageExtender(
+					NewLogsExtender(NewBrowser(gvr), nil),
+				),
 			),
 		),
 	}
-	d.SetBindKeysFn(d.bindKeys)
+	d.AddBindKeysFn(d.bindKeys)
 	d.GetTable().SetEnterFn(d.showPods)
-	d.GetTable().SetColorerFn(render.DaemonSet{}.ColorerFunc())
 
 	return &d
 }
@@ -45,6 +45,7 @@ func (d *DaemonSet) showPods(app *App, model ui.Tabular, _, path string) {
 	ds, err := res.GetInstance(path)
 	if err != nil {
 		d.App().Flash().Err(err)
+		return
 	}
 
 	showPodsFromSelector(app, path, ds.Spec.Selector)

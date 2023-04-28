@@ -11,11 +11,8 @@ import (
 )
 
 // ServiceAccount renders a K8s ServiceAccount to screen.
-type ServiceAccount struct{}
-
-// ColorerFunc colors a resource row.
-func (ServiceAccount) ColorerFunc() ColorerFunc {
-	return DefaultColorer
+type ServiceAccount struct {
+	Base
 }
 
 // Header returns a header row.
@@ -26,7 +23,7 @@ func (ServiceAccount) Header(ns string) Header {
 		HeaderColumn{Name: "SECRET"},
 		HeaderColumn{Name: "LABELS", Wide: true},
 		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		HeaderColumn{Name: "AGE", Time: true},
 	}
 }
 
@@ -49,7 +46,7 @@ func (s ServiceAccount) Render(o interface{}, ns string, r *Row) error {
 		strconv.Itoa(len(sa.Secrets)),
 		mapToStr(sa.Labels),
 		"",
-		toAge(sa.ObjectMeta.CreationTimestamp),
+		toAge(sa.GetCreationTimestamp()),
 	}
 
 	return nil

@@ -17,9 +17,22 @@ k9s:
     fgColor: *fg
     bgColor: *bg
     logoColor: *fg
+  prompt:
+    fgColor: *fg
+    bgColor: *bg
+    suggestColor: &gray
   info:
     fgColor: *text
     sectionColor: *fg
+  dialog:
+    fgColor: *fg
+    bgColor: *bg
+    buttonFgColor: *fg
+    buttonBgColor: *bg
+    buttonFocusFgColor: *slate
+    buttonFocusBgColor: *white
+    labelFgColor: *ghost
+    fieldFgColor: *white
   frame:
     border:
       fgColor: *fg
@@ -37,7 +50,7 @@ k9s:
       modifyColor: *text
       addColor: *ghost
       errorColor: *err
-      highlightcolor: *dslate
+      highlightColor: *dslate
       killColor: *slate
       completedColor: *gray
     title:
@@ -49,7 +62,8 @@ k9s:
     table:
       fgColor: *fg
       bgColor: *bg
-      cursorColor: *fg
+      cursorBgColor: *fg
+      cursorFgColor: *bg
       markColor: *mark
       header:
         fgColor: *dslate

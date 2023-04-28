@@ -6,13 +6,14 @@ import (
 
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
-	"github.com/rs/zerolog/log"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	metav1beta1 "k8s.io/apimachinery/pkg/apis/meta/v1beta1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/client-go/rest"
 )
+
+// BOZO!! Figure out how to convert to table def and use factory.
 
 // Table retrieves K8s resources as tabular data.
 type Table struct {
@@ -45,7 +46,7 @@ func (t *Table) Get(ctx context.Context, path string) (runtime.Object, error) {
 func (t *Table) List(ctx context.Context, ns string) ([]runtime.Object, error) {
 	labelSel, ok := ctx.Value(internal.KeyLabels).(string)
 	if !ok {
-		log.Debug().Msgf("No label selector found in context. Listing all resources")
+		labelSel = ""
 	}
 
 	a := fmt.Sprintf(gvFmt, metav1beta1.SchemeGroupVersion.Version, metav1beta1.GroupName)
@@ -74,20 +75,24 @@ func (t *Table) List(ctx context.Context, ns string) ([]runtime.Object, error) {
 const gvFmt = "application/json;as=Table;v=%s;g=%s, application/json"
 
 func (t *Table) getClient() (*rest.RESTClient, error) {
-	crConfig := t.Client().RestConfigOrDie()
-	gv := t.gvr.GV()
-	crConfig.GroupVersion = &gv
-	crConfig.APIPath = "/apis"
-	if t.gvr.G() == "" {
-		crConfig.APIPath = "/api"
-	}
-	codec, _ := t.codec()
-	crConfig.NegotiatedSerializer = codec.WithoutConversion()
-
-	crRestClient, err := rest.RESTClientFor(crConfig)
+	cfg, err := t.Client().RestConfig()
 	if err != nil {
 		return nil, err
 	}
+	gv := t.gvr.GV()
+	cfg.GroupVersion = &gv
+	cfg.APIPath = "/apis"
+	if t.gvr.G() == "" {
+		cfg.APIPath = "/api"
+	}
+	codec, _ := t.codec()
+	cfg.NegotiatedSerializer = codec.WithoutConversion()
+
+	crRestClient, err := rest.RESTClientFor(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	return crRestClient, nil
 }
 

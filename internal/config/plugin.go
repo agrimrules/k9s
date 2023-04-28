@@ -1,28 +1,36 @@
 package config
 
 import (
-	"io/ioutil"
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v2"
 )
 
 // K9sPlugins manages K9s plugins.
-var K9sPlugins = filepath.Join(K9sHome, "plugin.yml")
+var K9sPlugins = filepath.Join(K9sHome(), "plugin.yml")
 
 // Plugins represents a collection of plugins.
 type Plugins struct {
 	Plugin map[string]Plugin `yaml:"plugin"`
 }
 
-// Plugin describes a K9s plugin
+// Plugin describes a K9s plugin.
 type Plugin struct {
-	ShortCut    string   `yaml:"shortCut"`
 	Scopes      []string `yaml:"scopes"`
+	Args        []string `yaml:"args"`
+	ShortCut    string   `yaml:"shortCut"`
+	Pipes       []string `yaml:"pipes"`
 	Description string   `yaml:"description"`
 	Command     string   `yaml:"command"`
+	Confirm     bool     `yaml:"confirm"`
 	Background  bool     `yaml:"background"`
-	Args        []string `yaml:"args"`
+}
+
+func (p Plugin) String() string {
+	return fmt.Sprintf("[%s] %s(%s)", p.ShortCut, p.Command, strings.Join(p.Args, " "))
 }
 
 // NewPlugins returns a new plugin.
@@ -39,7 +47,7 @@ func (p Plugins) Load() error {
 
 // LoadPlugins loads plugins from a given file.
 func (p Plugins) LoadPlugins(path string) error {
-	f, err := ioutil.ReadFile(path)
+	f, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}

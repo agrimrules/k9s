@@ -11,11 +11,8 @@ import (
 )
 
 // StatefulSet renders a K8s StatefulSet to screen.
-type StatefulSet struct{}
-
-// ColorerFunc colors a resource row.
-func (s StatefulSet) ColorerFunc() ColorerFunc {
-	return DefaultColorer
+type StatefulSet struct {
+	Base
 }
 
 // Header returns a header row.
@@ -30,7 +27,7 @@ func (StatefulSet) Header(ns string) Header {
 		HeaderColumn{Name: "IMAGES", Wide: true},
 		HeaderColumn{Name: "LABELS", Wide: true},
 		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		HeaderColumn{Name: "AGE", Time: true},
 	}
 }
 
@@ -57,7 +54,7 @@ func (s StatefulSet) Render(o interface{}, ns string, r *Row) error {
 		podImageNames(sts.Spec.Template.Spec, true),
 		mapToStr(sts.Labels),
 		asStatus(s.diagnose(sts.Status.Replicas, sts.Status.ReadyReplicas)),
-		toAge(sts.ObjectMeta.CreationTimestamp),
+		toAge(sts.GetCreationTimestamp()),
 	}
 
 	return nil

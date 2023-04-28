@@ -9,7 +9,7 @@ import (
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/render"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
@@ -17,6 +17,41 @@ import (
 
 func init() {
 	zerolog.SetGlobalLevel(zerolog.Disabled)
+}
+
+func TestParsePFAnn(t *testing.T) {
+	uu := map[string]struct {
+		ann, co, port string
+		ok            bool
+	}{
+		"named-port": {
+			ann:  "c1:blee",
+			co:   "c1",
+			port: "blee",
+			ok:   true,
+		},
+		"port-num": {
+			ann:  "c1:1234",
+			co:   "c1",
+			port: "1234",
+			ok:   true,
+		},
+		"toast": {
+			ann: "zorg",
+		},
+	}
+
+	for k := range uu {
+		u := uu[k]
+		t.Run(k, func(t *testing.T) {
+			co, port, ok := parsePFAnn(u.ann)
+			if u.ok {
+				assert.Equal(t, u.co, co)
+				assert.Equal(t, u.port, port)
+				assert.Equal(t, u.ok, ok)
+			}
+		})
+	}
 }
 
 func TestExtractApp(t *testing.T) {
@@ -46,11 +81,11 @@ func TestExtractApp(t *testing.T) {
 	}
 }
 
-func TestFwFWQN(t *testing.T) {
+func TestFwFQN(t *testing.T) {
 	uu := map[string]struct {
 		po, co, e string
 	}{
-		"cool": {po: "p1", co: "c1", e: "p1:c1"},
+		"cool": {po: "p1", co: "c1", e: "p1|c1"},
 	}
 
 	for k := range uu {
@@ -96,7 +131,7 @@ func TestK8sEnv(t *testing.T) {
 	assert.Equal(t, cl, env["CLUSTER"])
 	assert.Equal(t, ctx, env["CONTEXT"])
 	assert.Equal(t, u, env["USER"])
-	assert.Equal(t, "n/a", env["GROUPS"])
+	assert.Equal(t, render.NAValue, env["GROUPS"])
 	assert.Equal(t, cfg, env["KUBECONFIG"])
 }
 
@@ -123,7 +158,7 @@ func TestK9sEnv(t *testing.T) {
 	assert.Equal(t, cl, env["CLUSTER"])
 	assert.Equal(t, ctx, env["CONTEXT"])
 	assert.Equal(t, u, env["USER"])
-	assert.Equal(t, "n/a", env["GROUPS"])
+	assert.Equal(t, render.NAValue, env["GROUPS"])
 	assert.Equal(t, cfg, env["KUBECONFIG"])
 	assert.Equal(t, "fred", env["NAMESPACE"])
 	assert.Equal(t, "blee", env["NAME"])

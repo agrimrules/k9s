@@ -4,17 +4,17 @@ import (
 	"testing"
 
 	"github.com/derailed/k9s/internal/config"
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestColor(t *testing.T) {
 	uu := map[string]tcell.Color{
 		"blah":    tcell.ColorDefault,
-		"blue":    tcell.ColorBlue,
-		"#ffffff": tcell.NewHexColor(33554431),
-		"#ff0000": tcell.NewHexColor(33488896),
+		"blue":    tcell.ColorBlue.TrueColor(),
+		"#ffffff": tcell.NewHexColor(16777215),
+		"#ff0000": tcell.NewHexColor(16711680),
 	}
 
 	for k := range uu {
@@ -30,12 +30,12 @@ func TestSkinNone(t *testing.T) {
 	assert.Nil(t, s.Load("testdata/empty_skin.yml"))
 	s.Update()
 
-	assert.Equal(t, "cadetblue", s.Body().FgColor.String())
-	assert.Equal(t, "black", s.Body().BgColor.String())
-	assert.Equal(t, "black", s.Table().BgColor.String())
-	assert.Equal(t, tcell.ColorCadetBlue, s.FgColor())
-	assert.Equal(t, tcell.ColorBlack, s.BgColor())
-	assert.Equal(t, tcell.ColorBlack, tview.Styles.PrimitiveBackgroundColor)
+	assert.Equal(t, "#5f9ea0", s.Body().FgColor.String())
+	assert.Equal(t, "#000000", s.Body().BgColor.String())
+	assert.Equal(t, "#000000", s.Table().BgColor.String())
+	assert.Equal(t, tcell.ColorCadetBlue.TrueColor(), s.FgColor())
+	assert.Equal(t, tcell.ColorBlack.TrueColor(), s.BgColor())
+	assert.Equal(t, tcell.ColorBlack.TrueColor(), tview.Styles.PrimitiveBackgroundColor)
 }
 
 func TestSkin(t *testing.T) {
@@ -43,12 +43,12 @@ func TestSkin(t *testing.T) {
 	assert.Nil(t, s.Load("testdata/black_and_wtf.yml"))
 	s.Update()
 
-	assert.Equal(t, "white", s.Body().FgColor.String())
-	assert.Equal(t, "black", s.Body().BgColor.String())
-	assert.Equal(t, "black", s.Table().BgColor.String())
-	assert.Equal(t, tcell.ColorWhite, s.FgColor())
-	assert.Equal(t, tcell.ColorBlack, s.BgColor())
-	assert.Equal(t, tcell.ColorBlack, tview.Styles.PrimitiveBackgroundColor)
+	assert.Equal(t, "#ffffff", s.Body().FgColor.String())
+	assert.Equal(t, "#000000", s.Body().BgColor.String())
+	assert.Equal(t, "#000000", s.Table().BgColor.String())
+	assert.Equal(t, tcell.ColorWhite.TrueColor(), s.FgColor())
+	assert.Equal(t, tcell.ColorBlack.TrueColor(), s.BgColor())
+	assert.Equal(t, tcell.ColorBlack.TrueColor(), tview.Styles.PrimitiveBackgroundColor)
 }
 
 func TestSkinNotExits(t *testing.T) {

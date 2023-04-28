@@ -12,11 +12,8 @@ import (
 )
 
 // Endpoints renders a K8s Endpoints to screen.
-type Endpoints struct{}
-
-// ColorerFunc colors a resource row.
-func (Endpoints) ColorerFunc() ColorerFunc {
-	return DefaultColorer
+type Endpoints struct {
+	Base
 }
 
 // Header returns a header row.
@@ -25,7 +22,7 @@ func (Endpoints) Header(ns string) Header {
 		HeaderColumn{Name: "NAMESPACE"},
 		HeaderColumn{Name: "NAME"},
 		HeaderColumn{Name: "ENDPOINTS"},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		HeaderColumn{Name: "AGE", Time: true},
 	}
 }
 
@@ -47,7 +44,7 @@ func (e Endpoints) Render(o interface{}, ns string, r *Row) error {
 		ep.Namespace,
 		ep.Name,
 		missing(toEPs(ep.Subsets)),
-		toAge(ep.ObjectMeta.CreationTimestamp),
+		toAge(ep.GetCreationTimestamp()),
 	}
 
 	return nil
@@ -62,7 +59,7 @@ func toEPs(ss []v1.EndpointSubset) string {
 		pp := make([]string, len(s.Ports))
 		portsToStrs(s.Ports, pp)
 		a := make([]string, len(s.Addresses))
-		proccessIPs(a, pp, s.Addresses)
+		processIPs(a, pp, s.Addresses)
 		aa = append(aa, strings.Join(a, ","))
 	}
 	return strings.Join(aa, ",")
@@ -74,7 +71,7 @@ func portsToStrs(pp []v1.EndpointPort, ss []string) {
 	}
 }
 
-func proccessIPs(aa []string, pp []string, addrs []v1.EndpointAddress) {
+func processIPs(aa []string, pp []string, addrs []v1.EndpointAddress) {
 	const maxIPs = 3
 	var i int
 	for _, a := range addrs {

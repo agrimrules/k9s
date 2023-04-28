@@ -5,21 +5,21 @@ import (
 	"strings"
 
 	"github.com/derailed/k9s/internal/client"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // Forwarder represents a port forwarder.
 type Forwarder interface {
-	// Path returns a resource FQN.
-	Path() string
+	// ID returns the PF FQN.
+	ID() string
 
 	// Container returns a container name.
 	Container() string
 
 	// Ports returns container exposed ports.
-	Ports() []string
+	Port() string
 
 	// Active returns forwarder current state.
 	Active() bool
@@ -29,7 +29,9 @@ type Forwarder interface {
 }
 
 // PortForward renders a portforwards to screen.
-type PortForward struct{}
+type PortForward struct {
+	Base
+}
 
 // ColorerFunc colors a resource row.
 func (PortForward) ColorerFunc() ColorerFunc {
@@ -49,7 +51,7 @@ func (PortForward) Header(ns string) Header {
 		HeaderColumn{Name: "C"},
 		HeaderColumn{Name: "N"},
 		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		HeaderColumn{Name: "AGE", Time: true},
 	}
 }
 
@@ -60,15 +62,15 @@ func (f PortForward) Render(o interface{}, gvr string, r *Row) error {
 		return fmt.Errorf("expecting a ForwardRes but got %T", o)
 	}
 
-	ports := strings.Split(pf.Ports()[0], ":")
-	ns, n := client.Namespaced(pf.Path())
+	ports := strings.Split(pf.Port(), ":")
+	r.ID = pf.ID()
+	ns, n := client.Namespaced(r.ID)
 
-	r.ID = pf.Path()
 	r.Fields = Fields{
 		ns,
 		trimContainer(n),
 		pf.Container(),
-		strings.Join(pf.Ports(), ","),
+		pf.Port(),
 		UrlFor(pf.Config.Host, pf.Config.Path, ports[0]),
 		AsThousands(int64(pf.Config.C)),
 		AsThousands(int64(pf.Config.N)),
@@ -82,11 +84,13 @@ func (f PortForward) Render(o interface{}, gvr string, r *Row) error {
 // Helpers...
 
 func trimContainer(n string) string {
-	tokens := strings.Split(n, ":")
+	tokens := strings.Split(n, "|")
 	if len(tokens) == 0 {
 		return n
 	}
-	return tokens[0]
+	_, name := client.Namespaced(tokens[0])
+
+	return name
 }
 
 // UrlFor computes fq url for a given benchmark configuration.

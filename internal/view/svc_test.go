@@ -11,6 +11,12 @@ import (
 )
 
 func init() {
+	dao.MetaAccess.RegisterMeta("dir", metav1.APIResource{
+		Name:         "dir",
+		SingularName: "dir",
+		Kind:         "Directory",
+		Categories:   []string{"k9s"},
+	})
 	dao.MetaAccess.RegisterMeta("v1/pods", metav1.APIResource{
 		Name:         "pods",
 		SingularName: "pod",
@@ -43,7 +49,31 @@ func init() {
 		Verbs:        []string{"get", "list", "watch", "delete"},
 		Categories:   []string{"k9s"},
 	})
+	dao.MetaAccess.RegisterMeta("scheduling.k8s.io/v1/priorityclasses", metav1.APIResource{
+		Name:         "priorityclasses",
+		SingularName: "priorityclass",
+		Namespaced:   false,
+		Kind:         "PriorityClass",
+		Verbs:        []string{"get", "list", "watch", "delete"},
+		Categories:   []string{"k9s"},
+	})
+	dao.MetaAccess.RegisterMeta("v1/configmaps", metav1.APIResource{
+		Name:         "configmaps",
+		SingularName: "configmap",
+		Namespaced:   true,
+		Kind:         "ConfigMaps",
+		Verbs:        []string{"get", "list", "watch", "delete"},
+		Categories:   []string{"k9s"},
+	})
 
+	dao.MetaAccess.RegisterMeta("references", metav1.APIResource{
+		Name:         "references",
+		SingularName: "reference",
+		Namespaced:   true,
+		Kind:         "References",
+		Verbs:        []string{"get", "list", "watch", "delete"},
+		Categories:   []string{"k9s"},
+	})
 	dao.MetaAccess.RegisterMeta("aliases", metav1.APIResource{
 		Name:         "aliases",
 		SingularName: "alias",
@@ -125,6 +155,14 @@ func init() {
 		Verbs:        []string{"get", "list", "watch", "delete"},
 		Categories:   []string{"k9s"},
 	})
+	dao.MetaAccess.RegisterMeta("v1/persistentvolumeclaims", metav1.APIResource{
+		Name:         "persistentvolumeclaims",
+		SingularName: "persistentvolumeclaim",
+		Namespaced:   true,
+		Kind:         "PersistentVolumeClaims",
+		Verbs:        []string{"get", "list", "watch", "delete"},
+		Categories:   []string{"k9s"},
+	})
 }
 
 func TestServiceNew(t *testing.T) {
@@ -132,5 +170,5 @@ func TestServiceNew(t *testing.T) {
 
 	assert.Nil(t, s.Init(makeCtx()))
 	assert.Equal(t, "Services", s.Name())
-	assert.Equal(t, 9, len(s.Hints()))
+	assert.Equal(t, 10, len(s.Hints()))
 }

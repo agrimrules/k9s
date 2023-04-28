@@ -16,10 +16,12 @@ import (
 	"github.com/derailed/k9s/internal/ui"
 	"github.com/derailed/k9s/internal/ui/dialog"
 	"github.com/derailed/k9s/internal/xray"
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
 	"github.com/rs/zerolog/log"
 	"github.com/sahilm/fuzzy"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -48,7 +50,7 @@ func NewXray(gvr client.GVR) ResourceViewer {
 	}
 }
 
-// Init initializes the view
+// Init initializes the view.
 func (x *Xray) Init(ctx context.Context) error {
 	x.envFn = x.k9sEnv
 
@@ -72,7 +74,7 @@ func (x *Xray) Init(ctx context.Context) error {
 	x.SetBorderColor(x.app.Styles.Xray().FgColor.Color())
 	x.SetBorderFocusColor(x.app.Styles.Frame().Border.FocusColor.Color())
 	x.SetGraphicsColor(x.app.Styles.Xray().GraphicColor.Color())
-	x.SetTitle(fmt.Sprintf(" %s-%s ", xrayTitle, strings.Title(x.gvr.R())))
+	x.SetTitle(fmt.Sprintf(" %s-%s ", xrayTitle, cases.Title(language.Und, cases.NoLower).String(x.gvr.R())))
 
 	x.model.SetRefreshRate(time.Duration(x.app.Config.K9s.GetRefreshRate()) * time.Second)
 	x.model.SetNamespace(client.CleanseNamespace(x.app.Config.ActiveNamespace()))
@@ -90,6 +92,11 @@ func (x *Xray) Init(ctx context.Context) error {
 	x.refreshActions()
 
 	return nil
+}
+
+// InCmdMode checks if prompt is active.
+func (*Xray) InCmdMode() bool {
+	return false
 }
 
 // ExtraHints returns additional hints.
@@ -162,12 +169,12 @@ func (x *Xray) refreshActions() {
 		x.Actions().Delete(tcell.KeyEnter)
 		aa[ui.KeyS] = ui.NewKeyAction("Shell", x.shellCmd, true)
 		aa[ui.KeyL] = ui.NewKeyAction("Logs", x.logsCmd(false), true)
-		aa[ui.KeyShiftL] = ui.NewKeyAction("Logs Previous", x.logsCmd(true), true)
+		aa[ui.KeyP] = ui.NewKeyAction("Logs Previous", x.logsCmd(true), true)
 	case "v1/pods":
 		aa[ui.KeyS] = ui.NewKeyAction("Shell", x.shellCmd, true)
 		aa[ui.KeyA] = ui.NewKeyAction("Attach", x.attachCmd, true)
 		aa[ui.KeyL] = ui.NewKeyAction("Logs", x.logsCmd(false), true)
-		aa[ui.KeyShiftL] = ui.NewKeyAction("Logs Previous", x.logsCmd(true), true)
+		aa[ui.KeyP] = ui.NewKeyAction("Logs Previous", x.logsCmd(true), true)
 	}
 	x.Actions().Add(aa)
 }
@@ -262,7 +269,12 @@ func (x *Xray) showLogs(spec *xray.NodeSpec, prev bool) {
 		return
 	}
 
-	if err := x.app.inject(NewLog(client.NewGVR("v1/pods"), path, co, prev)); err != nil {
+	opts := dao.LogOptions{
+		Path:      path,
+		Container: co,
+		Previous:  prev,
+	}
+	if err := x.app.inject(NewLog(client.NewGVR("v1/pods"), &opts), false); err != nil {
 		x.app.Flash().Err(err)
 	}
 }
@@ -328,7 +340,7 @@ func (x *Xray) viewCmd(evt *tcell.EventKey) *tcell.EventKey {
 	}
 
 	details := NewDetails(x.app, "YAML", spec.Path(), true).Update(raw)
-	if err := x.app.inject(details); err != nil {
+	if err := x.app.inject(details, false); err != nil {
 		x.app.Flash().Err(err)
 	}
 
@@ -378,7 +390,7 @@ func (x *Xray) describe(gvr, path string) {
 	}
 
 	details := NewDetails(x.app, "Describe", path, true).Update(yaml)
-	if err := x.app.inject(details); err != nil {
+	if err := x.app.inject(details, false); err != nil {
 		x.app.Flash().Err(err)
 	}
 }
@@ -448,9 +460,7 @@ func (x *Xray) gotoCmd(evt *tcell.EventKey) *tcell.EventKey {
 	if len(strings.Split(spec.Path(), "/")) == 1 {
 		return nil
 	}
-	if err := x.app.gotoResource(client.NewGVR(spec.GVR()).R(), spec.Path(), false); err != nil {
-		x.app.Flash().Err(err)
-	}
+	x.app.gotoResource(client.NewGVR(spec.GVR()).R(), spec.Path(), false)
 
 	return nil
 }
@@ -464,6 +474,10 @@ func (x *Xray) filter(root *xray.TreeNode) *xray.TreeNode {
 	x.UpdateTitle()
 	if ui.IsFuzzySelector(q) {
 		return root.Filter(q, fuzzyFilter)
+	}
+
+	if ui.IsInverseSelector(q) {
+		return root.Filter(q, rxInverseFilter)
 	}
 
 	return root.Filter(q, rxFilter)
@@ -542,13 +556,16 @@ func (x *Xray) hydrate(parent *tview.TreeNode, n *xray.TreeNode) {
 // SetEnvFn sets the custom environment function.
 func (x *Xray) SetEnvFn(EnvFunc) {}
 
-// Refresh updates the view
+// Refresh updates the view.
 func (x *Xray) Refresh() {}
 
-// BufferChanged indicates the buffer was changed.
-func (x *Xray) BufferChanged(s string) {
+// BufferCompleted indicates the buffer was changed.
+func (x *Xray) BufferCompleted(_, _ string) {
 	x.update(x.filter(x.model.Peek()))
 }
+
+// BufferChanged indicates the buffer was changed.
+func (x *Xray) BufferChanged(_, _ string) {}
 
 // BufferActive indicates the buff activity changed.
 func (x *Xray) BufferActive(state bool, k model.BufferKind) {
@@ -588,8 +605,8 @@ func (x *Xray) Stop() {
 	x.CmdBuff().RemoveListener(x)
 }
 
-// SetBindKeysFn sets up extra key bindings.
-func (x *Xray) SetBindKeysFn(BindKeysFunc) {}
+// AddBindKeysFn sets up extra key bindings.
+func (x *Xray) AddBindKeysFn(BindKeysFunc) {}
 
 // SetContextFn sets custom context.
 func (x *Xray) SetContextFn(ContextFunc) {}
@@ -617,7 +634,7 @@ func (x *Xray) UpdateTitle() {
 }
 
 func (x *Xray) styleTitle() string {
-	base := fmt.Sprintf("%s-%s", xrayTitle, strings.Title(x.gvr.R()))
+	base := fmt.Sprintf("%s-%s", xrayTitle, cases.Title(language.Und, cases.NoLower).String(x.gvr.R()))
 	ns := x.model.GetNamespace()
 	if client.IsAllNamespaces(ns) {
 		ns = client.NamespaceAll
@@ -642,7 +659,7 @@ func (x *Xray) styleTitle() string {
 }
 
 func (x *Xray) resourceDelete(gvr client.GVR, spec *xray.NodeSpec, msg string) {
-	dialog.ShowDelete(x.app.Content.Pages, msg, func(cascade, force bool) {
+	dialog.ShowDelete(x.app.Styles.Dialog(), x.app.Content.Pages, msg, func(propagation *metav1.DeletionPropagation, force bool) {
 		x.app.Flash().Infof("Delete resource %s %s", spec.GVR(), spec.Path())
 		accessor, err := dao.AccessorFor(x.app.factory, gvr)
 		if err != nil {
@@ -655,7 +672,11 @@ func (x *Xray) resourceDelete(gvr client.GVR, spec *xray.NodeSpec, msg string) {
 			x.app.Flash().Errf("Invalid nuker %T", accessor)
 			return
 		}
-		if err := nuker.Delete(spec.Path(), true, true); err != nil {
+		grace := dao.DefaultGrace
+		if force {
+			grace = dao.ForceGrace
+		}
+		if err := nuker.Delete(context.Background(), spec.Path(), nil, grace); err != nil {
 			x.app.Flash().Errf("Delete failed with `%s", err)
 		} else {
 			x.app.Flash().Infof("%s `%s deleted successfully", x.GVR(), spec.Path())
@@ -685,6 +706,19 @@ func rxFilter(q, path string) bool {
 	}
 
 	return false
+}
+
+func rxInverseFilter(q, path string) bool {
+	q = strings.TrimSpace(q[1:])
+	rx := regexp.MustCompile(`(?i)` + q)
+	tokens := strings.Split(path, xray.PathSeparator)
+	for _, t := range tokens {
+		if rx.MatchString(t) {
+			return false
+		}
+	}
+
+	return true
 }
 
 func makeTreeNode(node *xray.TreeNode, expanded bool, showIcons bool, styles *config.Styles) *tview.TreeNode {

@@ -3,17 +3,79 @@ package view_test
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/dao"
+	"github.com/derailed/k9s/internal/ui"
 	"github.com/derailed/k9s/internal/view"
 	"github.com/derailed/tview"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestLog(t *testing.T) {
+	opts := dao.LogOptions{
+		Path:      "fred/p1",
+		Container: "blee",
+	}
+	v := view.NewLog(client.NewGVR("v1/pods"), &opts)
+	assert.NoError(t, v.Init(makeContext()))
+
+	ii := dao.NewLogItems()
+	ii.Add(dao.NewLogItemFromString("blee\n"), dao.NewLogItemFromString("bozo\n"))
+	ll := make([][]byte, ii.Len())
+	ii.Lines(0, false, ll)
+	v.Flush(ll)
+
+	assert.Equal(t, "Waiting for logs...\nblee\nbozo\n", v.Logs().GetText(true))
+}
+
+func TestLogFlush(t *testing.T) {
+	opts := dao.LogOptions{
+		Path:      "fred/p1",
+		Container: "blee",
+	}
+	v := view.NewLog(client.NewGVR("v1/pods"), &opts)
+	assert.NoError(t, v.Init(makeContext()))
+
+	items := dao.NewLogItems()
+	items.Add(
+		dao.NewLogItemFromString("\033[0;30mblee\n"),
+		dao.NewLogItemFromString("\033[0;32mBozo\n"),
+	)
+	ll := make([][]byte, items.Len())
+	items.Lines(0, false, ll)
+	v.Flush(ll)
+
+	assert.Equal(t, "[orange::d]Waiting for logs...\n[black::]blee\n[green::]Bozo\n\n", v.Logs().GetText(false))
+}
+
+func BenchmarkLogFlush(b *testing.B) {
+	opts := dao.LogOptions{
+		Path:      "fred/p1",
+		Container: "blee",
+	}
+	v := view.NewLog(client.NewGVR("v1/pods"), &opts)
+	_ = v.Init(makeContext())
+
+	items := dao.NewLogItems()
+	items.Add(
+		dao.NewLogItemFromString("\033[0;30mblee\n"),
+		dao.NewLogItemFromString("\033[0;101mBozo\n"),
+		dao.NewLogItemFromString("\033[0;101mBozo\n"),
+	)
+	ll := make([][]byte, items.Len())
+	items.Lines(0, false, ll)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		v.Flush(ll)
+	}
+}
 
 func TestLogAnsi(t *testing.T) {
 	buff := bytes.NewBufferString("")
@@ -30,17 +92,49 @@ func TestLogAnsi(t *testing.T) {
 }
 
 func TestLogViewSave(t *testing.T) {
-	v := view.NewLog(client.NewGVR("v1/pods"), "fred/p1", "blee", false)
-	v.Init(makeContext())
+	opts := dao.LogOptions{
+		Path:      "fred/p1",
+		Container: "blee",
+	}
+	v := view.NewLog(client.NewGVR("v1/pods"), &opts)
+	assert.NoError(t, v.Init(makeContext()))
 
 	app := makeApp()
-	v.Flush(dao.LogItems{dao.NewLogItemFromString("blee"), dao.NewLogItemFromString("bozo")})
-	config.K9sDumpDir = "/tmp"
-	dir := filepath.Join(config.K9sDumpDir, app.Config.K9s.CurrentCluster)
-	c1, _ := ioutil.ReadDir(dir)
+	ii := dao.NewLogItems()
+	ii.Add(dao.NewLogItemFromString("blee"), dao.NewLogItemFromString("bozo"))
+	ll := make([][]byte, ii.Len())
+	ii.Lines(0, false, ll)
+	v.Flush(ll)
+
+	dir := filepath.Join(app.Config.K9s.GetScreenDumpDir(), app.Config.K9s.CurrentCluster)
+	c1, _ := os.ReadDir(dir)
 	v.SaveCmd(nil)
-	c2, _ := ioutil.ReadDir(dir)
+	c2, _ := os.ReadDir(dir)
 	assert.Equal(t, len(c2), len(c1)+1)
+}
+
+func TestAllContainerKeyBinding(t *testing.T) {
+	uu := map[string]struct {
+		opts *dao.LogOptions
+		e    bool
+	}{
+		"action-present": {
+			opts: &dao.LogOptions{Path: "", DefaultContainer: "container"},
+			e:    true,
+		},
+		"action-missing": {
+			opts: &dao.LogOptions{},
+		},
+	}
+	for k := range uu {
+		u := uu[k]
+		t.Run(k, func(t *testing.T) {
+			v := view.NewLog(client.NewGVR("v1/pods"), u.opts)
+			assert.NoError(t, v.Init(makeContext()))
+			_, got := v.Logs().Actions()[ui.KeyA]
+			assert.Equal(t, u.e, got)
+		})
+	}
 }
 
 // ----------------------------------------------------------------------------

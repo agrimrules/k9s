@@ -28,6 +28,7 @@ func TestContainer(t *testing.T) {
 	assert.Equal(t, "fred", r.ID)
 	assert.Equal(t, render.Fields{
 		"fred",
+		"●",
 		"img",
 		"false",
 		"Running",
@@ -36,9 +37,11 @@ func TestContainer(t *testing.T) {
 		"off:off",
 		"10",
 		"20",
+		"20:20",
+		"100:100",
+		"50",
 		"50",
 		"20",
-		"50",
 		"20",
 		"",
 		"container is not ready",
@@ -47,13 +50,31 @@ func TestContainer(t *testing.T) {
 	)
 }
 
+func BenchmarkContainerRender(b *testing.B) {
+	var c render.Container
+
+	cres := render.ContainerRes{
+		Container: makeContainer(),
+		Status:    makeContainerStatus(),
+		MX:        makeContainerMetrics(),
+		IsInit:    false,
+		Age:       makeAge(),
+	}
+	var r render.Row
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		_ = c.Render(cres, "blee", &r)
+	}
+}
+
 // ----------------------------------------------------------------------------
 // Helpers...
 
 func toQty(s string) resource.Quantity {
 	q, _ := resource.ParseQuantity(s)
 	return q
-
 }
 
 func makeContainerMetrics() *mv1beta1.ContainerMetrics {

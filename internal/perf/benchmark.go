@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/derailed/k9s/internal/dao"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,14 +19,17 @@ import (
 )
 
 const (
-	// BOZO!! Revisit bench and when we should timeout
+	// BOZO!! Revisit bench and when we should timeout.
 	benchTimeout = 2 * time.Minute
 	benchFmat    = "%s_%s_%d.txt"
 	k9sUA        = "k9s/"
 )
 
-// K9sBenchDir directory to store K9s Benchmark files.
-var K9sBenchDir = filepath.Join(os.TempDir(), fmt.Sprintf("k9s-bench-%s", config.MustK9sUser()))
+
+var (
+	// K9sBenchDir directory to store K9s Benchmark files.
+	K9sBenchDir = filepath.Join(os.TempDir(), fmt.Sprintf("k9s-bench-%s", config.MustK9sUser()))
+)
 
 // Benchmark puts a workload under load.
 type Benchmark struct {
@@ -47,21 +50,18 @@ func NewBenchmark(base, version string, cfg config.BenchConfig) (*Benchmark, err
 }
 
 func (b *Benchmark) init(base, version string) error {
-	log.Debug().Msgf("BENCH-INIT")
-	req, err := http.NewRequest(b.config.HTTP.Method, base, nil)
+	var ctx context.Context
+	ctx, b.cancelFn = context.WithTimeout(context.Background(), benchTimeout)
+	req, err := http.NewRequestWithContext(ctx, b.config.HTTP.Method, base, nil)
 	if err != nil {
 		return err
 	}
-	log.Debug().Msgf("Benchmarking Request %s", req.URL.String())
-
 	if b.config.Auth.User != "" || b.config.Auth.Password != "" {
 		req.SetBasicAuth(b.config.Auth.User, b.config.Auth.Password)
 	}
-
-	var ctx context.Context
-	ctx, b.cancelFn = context.WithTimeout(context.Background(), benchTimeout)
-	req = req.WithContext(ctx)
 	req.Header = b.config.HTTP.Headers
+	log.Debug().Msgf("Benchmarking Request %s", req.URL.String())
+
 	ua := req.UserAgent()
 	if ua == "" {
 		ua = k9sUA
@@ -74,7 +74,7 @@ func (b *Benchmark) init(base, version string) error {
 	}
 	req.Header.Set("User-Agent", ua)
 
-	log.Debug().Msgf("Benching %d:%d", b.config.N, b.config.C)
+	log.Debug().Msgf("Using bench config N:%d--C:%d", b.config.N, b.config.C)
 
 	b.worker = &requester.Work{
 		Request:     req,
@@ -82,7 +82,6 @@ func (b *Benchmark) init(base, version string) error {
 		N:           b.config.N,
 		C:           b.config.C,
 		H2:          b.config.HTTP.HTTP2,
-		Output:      "",
 	}
 
 	return nil
@@ -90,12 +89,12 @@ func (b *Benchmark) init(base, version string) error {
 
 // Cancel kills the benchmark in progress.
 func (b *Benchmark) Cancel() {
-	b.mx.Lock()
-	defer b.mx.Unlock()
-
 	if b == nil {
 		return
 	}
+
+	b.mx.Lock()
+	defer b.mx.Unlock()
 	b.canceled = true
 	if b.cancelFn != nil {
 		b.cancelFn()
@@ -108,13 +107,12 @@ func (b *Benchmark) Canceled() bool {
 	return b.canceled
 }
 
-// Run starts a benchmark,
+// Run starts a benchmark,.
 func (b *Benchmark) Run(cluster string, done func()) {
 	log.Debug().Msgf("Running benchmark on cluster %s", cluster)
-	log.Debug().Msgf("BENCH-CFG %#v", b.worker)
 	buff := new(bytes.Buffer)
 	b.worker.Writer = buff
-	// this call will block until the benchmark is complete or timesout.
+	// this call will block until the benchmark is complete or times out.
 	b.worker.Run()
 	b.worker.Stop()
 	if len(buff.Bytes()) > 0 {
@@ -132,7 +130,7 @@ func (b *Benchmark) save(cluster string, r io.Reader) error {
 	}
 
 	ns, n := client.Namespaced(b.config.Name)
-	file := filepath.Join(dir, fmt.Sprintf(benchFmat, ns, n, time.Now().UnixNano()))
+	file := filepath.Join(dir, fmt.Sprintf(benchFmat, ns, dao.BenchRx.ReplaceAllString(n, "_"), time.Now().UnixNano()))
 	f, err := os.Create(file)
 	if err != nil {
 		return err
@@ -143,7 +141,7 @@ func (b *Benchmark) save(cluster string, r io.Reader) error {
 		}
 	}()
 
-	bb, err := ioutil.ReadAll(r)
+	bb, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}

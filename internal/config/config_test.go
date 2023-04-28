@@ -2,10 +2,11 @@ package config_test
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/config"
 	m "github.com/petergtz/pegomock"
 	"github.com/rs/zerolog"
@@ -18,20 +19,20 @@ func init() {
 }
 
 func TestConfigRefine(t *testing.T) {
-	cfgFile, ctx, cluster, ns := "testdata/kubeconfig-test.yml", "test", "c1", "ns1"
+	cfgFile, ctx, cluster, ns := "testdata/kubeconfig-test.yml", "test2", "cluster2", "ns2"
 	uu := map[string]struct {
 		flags                       *genericclioptions.ConfigFlags
 		issue                       bool
 		context, cluster, namespace string
 	}{
-		"kubeconfig": {
+		"plain": {
 			flags:     &genericclioptions.ConfigFlags{KubeConfig: &cfgFile},
 			issue:     false,
-			context:   "test",
-			cluster:   "testCluster",
-			namespace: "testNS",
+			context:   "test1",
+			cluster:   "cluster1",
+			namespace: "ns1",
 		},
-		"override": {
+		"overrideNS": {
 			flags: &genericclioptions.ConfigFlags{
 				KubeConfig:  &cfgFile,
 				Context:     &ctx,
@@ -59,11 +60,10 @@ func TestConfigRefine(t *testing.T) {
 		t.Run(k, func(t *testing.T) {
 			mc := NewMockConnection()
 			m.When(mc.ValidNamespaces()).ThenReturn(namespaces(), nil)
-			mk := NewMockKubeSettings()
-			m.When(mk.NamespaceNames(namespaces())).ThenReturn([]string{"default"})
+			mk := newMockSettings(u.flags)
 			cfg := config.NewConfig(mk)
-			err := cfg.Refine(u.flags)
 
+			err := cfg.Refine(u.flags, nil, client.NewConfig(u.flags))
 			if u.issue {
 				assert.NotNil(t, err)
 			} else {
@@ -87,7 +87,6 @@ func TestConfigValidate(t *testing.T) {
 	cfg.SetConnection(mc)
 	assert.Nil(t, cfg.Load("testdata/k9s.yml"))
 	cfg.Validate()
-	// mc.VerifyWasCalledOnce().ValidNamespaces()
 }
 
 func TestConfigLoad(t *testing.T) {
@@ -199,7 +198,7 @@ func TestConfigSaveFile(t *testing.T) {
 	m.When(mk.CurrentContextName()).ThenReturn("minikube", nil)
 	m.When(mk.CurrentClusterName()).ThenReturn("minikube", nil)
 	m.When(mk.CurrentNamespaceName()).ThenReturn("default", nil)
-	m.When(mk.ClusterNames()).ThenReturn([]string{"minikube", "fred", "blee"}, nil)
+	m.When(mk.ClusterNames()).ThenReturn(map[string]struct{}{"minikube": {}, "fred": {}, "blee": {}}, nil)
 	m.When(mk.NamespaceNames(namespaces())).ThenReturn([]string{"default"})
 
 	cfg := config.NewConfig(mk)
@@ -216,7 +215,7 @@ func TestConfigSaveFile(t *testing.T) {
 	err := cfg.SaveFile(path)
 	assert.Nil(t, err)
 
-	raw, err := ioutil.ReadFile(path)
+	raw, err := os.ReadFile(path)
 	assert.Nil(t, err)
 	assert.Equal(t, expectedConfig, string(raw))
 }
@@ -229,7 +228,7 @@ func TestConfigReset(t *testing.T) {
 	m.When(mk.CurrentContextName()).ThenReturn("blee", nil)
 	m.When(mk.CurrentClusterName()).ThenReturn("blee", nil)
 	m.When(mk.CurrentNamespaceName()).ThenReturn("default", nil)
-	m.When(mk.ClusterNames()).ThenReturn([]string{"blee"}, nil)
+	m.When(mk.ClusterNames()).ThenReturn(map[string]struct{}{"blee": {}}, nil)
 	m.When(mk.NamespaceNames(namespaces())).ThenReturn([]string{"default"})
 
 	cfg := config.NewConfig(mk)
@@ -242,7 +241,7 @@ func TestConfigReset(t *testing.T) {
 	err := cfg.SaveFile(path)
 	assert.Nil(t, err)
 
-	raw, err := ioutil.ReadFile(path)
+	raw, err := os.ReadFile(path)
 	assert.Nil(t, err)
 	assert.Equal(t, resetConfig, string(raw))
 }
@@ -256,18 +255,42 @@ func TestSetup(t *testing.T) {
 	})
 }
 
+type mockSettings struct {
+	flags *genericclioptions.ConfigFlags
+}
+
+var _ config.KubeSettings = (*mockSettings)(nil)
+
+func newMockSettings(flags *genericclioptions.ConfigFlags) *mockSettings {
+	return &mockSettings{flags: flags}
+}
+func (m *mockSettings) CurrentContextName() (string, error) {
+	return *m.flags.Context, nil
+}
+func (m *mockSettings) CurrentClusterName() (string, error) { return "", nil }
+func (m *mockSettings) CurrentNamespaceName() (string, error) {
+	return *m.flags.Namespace, nil
+}
+func (m *mockSettings) ClusterNames() (map[string]struct{}, error) { return nil, nil }
+
 // ----------------------------------------------------------------------------
 // Test Data...
 
 var expectedConfig = `k9s:
   refreshRate: 100
+  maxConnRetry: 5
+  enableMouse: false
   headless: false
+  logoless: false
+  crumbsless: false
   readOnly: true
+  noExitOnCtrlC: false
   noIcons: false
+  skipLatestRevCheck: false
   logger:
     tail: 500
     buffer: 800
-    sinceSeconds: -1
+    sinceSeconds: 300
     fullScreenLogs: false
     textWrap: false
     showTime: false
@@ -277,34 +300,71 @@ var expectedConfig = `k9s:
     blee:
       namespace:
         active: default
+        lockFavorites: false
         favorites:
         - default
       view:
         active: po
       featureGates:
         nodeShell: false
+      shellPod:
+        image: busybox:1.35.0
+        command: []
+        args: []
+        namespace: default
+        limits:
+          cpu: 100m
+          memory: 100Mi
+        labels: {}
+      portForwardAddress: localhost
     fred:
       namespace:
         active: default
+        lockFavorites: false
         favorites:
         - default
+        - kube-public
         - istio-system
         - all
+        - kube-system
       view:
         active: po
       featureGates:
         nodeShell: false
+      shellPod:
+        image: busybox:1.35.0
+        command: []
+        args: []
+        namespace: default
+        limits:
+          cpu: 100m
+          memory: 100Mi
+        labels: {}
+      portForwardAddress: localhost
     minikube:
       namespace:
         active: kube-system
+        lockFavorites: false
         favorites:
         - default
+        - kube-public
         - istio-system
         - all
+        - kube-system
       view:
         active: ctx
       featureGates:
         nodeShell: false
+      shellPod:
+        image: busybox:1.35.0
+        command: []
+        args: []
+        namespace: default
+        limits:
+          cpu: 100m
+          memory: 100Mi
+        labels: {}
+      portForwardAddress: localhost
   thresholds:
     cpu:
       critical: 90
@@ -312,17 +372,24 @@ var expectedConfig = `k9s:
     memory:
       critical: 90
       warn: 70
+  screenDumpDir: /tmp
 `
 
 var resetConfig = `k9s:
   refreshRate: 2
+  maxConnRetry: 5
+  enableMouse: false
   headless: false
+  logoless: false
+  crumbsless: false
   readOnly: false
+  noExitOnCtrlC: false
   noIcons: false
+  skipLatestRevCheck: false
   logger:
     tail: 200
     buffer: 2000
-    sinceSeconds: -1
+    sinceSeconds: 300
     fullScreenLogs: false
     textWrap: false
     showTime: false
@@ -332,12 +399,23 @@ var resetConfig = `k9s:
     blee:
       namespace:
         active: default
+        lockFavorites: false
         favorites:
         - default
       view:
         active: po
       featureGates:
         nodeShell: false
+      shellPod:
+        image: busybox:1.35.0
+        command: []
+        args: []
+        namespace: default
+        limits:
+          cpu: 100m
+          memory: 100Mi
+        labels: {}
+      portForwardAddress: localhost
   thresholds:
     cpu:
       critical: 90
@@ -345,4 +423,5 @@ var resetConfig = `k9s:
     memory:
       critical: 90
       warn: 70
+  screenDumpDir: /tmp
 `

@@ -6,13 +6,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // ScreenDump renders a screendumps to screen.
-type ScreenDump struct{}
+type ScreenDump struct {
+	Base
+}
 
 // ColorerFunc colors a resource row.
 func (ScreenDump) ColorerFunc() ColorerFunc {
@@ -21,21 +23,13 @@ func (ScreenDump) ColorerFunc() ColorerFunc {
 	}
 }
 
-// DecoratorFunc decorates a string.
-type DecoratorFunc func(string) string
-
-// AgeDecorator represents a timestamped as human column.
-var AgeDecorator = func(a string) string {
-	return toAgeHuman(a)
-}
-
 // Header returns a header row.
 func (ScreenDump) Header(ns string) Header {
 	return Header{
 		HeaderColumn{Name: "NAME"},
 		HeaderColumn{Name: "DIR"},
 		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		HeaderColumn{Name: "AGE", Time: true},
 	}
 }
 

@@ -8,7 +8,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	mv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	v1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
@@ -29,14 +28,13 @@ func TestToPercentage(t *testing.T) {
 }
 
 func TestToMB(t *testing.T) {
-	const mb = 1024 * 1024
 	uu := []struct {
 		v int64
 		e int64
 	}{
 		{0, 0},
-		{2 * mb, 2},
-		{10 * mb, 10},
+		{2 * client.MegaByte, 2},
+		{10 * client.MegaByte, 10},
 	}
 
 	for _, u := range uu {
@@ -46,7 +44,7 @@ func TestToMB(t *testing.T) {
 
 func TestPodsMetrics(t *testing.T) {
 	uu := map[string]struct {
-		metrics *mv1beta1.PodMetricsList
+		metrics *v1beta1.PodMetricsList
 		eSize   int
 		e       client.PodsMetrics
 	}{
@@ -111,7 +109,7 @@ func BenchmarkPodsMetrics(b *testing.B) {
 func TestNodesMetrics(t *testing.T) {
 	uu := map[string]struct {
 		nodes   *v1.NodeList
-		metrics *mv1beta1.NodeMetricsList
+		metrics *v1beta1.NodeMetricsList
 		eSize   int
 		e       client.NodesMetrics
 	}{
@@ -213,7 +211,7 @@ func BenchmarkNodesMetrics(b *testing.B) {
 func TestClusterLoad(t *testing.T) {
 	uu := map[string]struct {
 		nodes   *v1.NodeList
-		metrics *mv1beta1.NodeMetricsList
+		metrics *v1beta1.NodeMetricsList
 		eSize   int
 		e       client.ClusterMetrics
 	}{
@@ -265,8 +263,7 @@ func TestClusterLoad(t *testing.T) {
 		u := uu[k]
 		t.Run(k, func(t *testing.T) {
 			var cmx client.ClusterMetrics
-			m.ClusterLoad(u.nodes, u.metrics, &cmx)
-
+			_ = m.ClusterLoad(u.nodes, u.metrics, &cmx)
 			assert.Equal(t, u.e, cmx)
 		})
 	}
@@ -280,8 +277,8 @@ func BenchmarkClusterLoad(b *testing.B) {
 		},
 	}
 
-	metrics := mv1beta1.NodeMetricsList{
-		Items: []mv1beta1.NodeMetrics{
+	metrics := v1beta1.NodeMetricsList{
+		Items: []v1beta1.NodeMetrics{
 			*makeMxNode("n1", "50m", "1Mi"),
 			*makeMxNode("n2", "50m", "1Mi"),
 		},
@@ -292,7 +289,7 @@ func BenchmarkClusterLoad(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for n := 0; n < b.N; n++ {
-		m.ClusterLoad(&nodes, &metrics, &mx)
+		_ = m.ClusterLoad(&nodes, &metrics, &mx)
 	}
 }
 

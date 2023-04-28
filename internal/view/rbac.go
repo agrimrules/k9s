@@ -5,9 +5,8 @@ import (
 
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
-	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 )
 
 // Rbac presents an RBAC policy viewer.
@@ -20,8 +19,7 @@ func NewRbac(gvr client.GVR) ResourceViewer {
 	r := Rbac{
 		ResourceViewer: NewBrowser(gvr),
 	}
-	r.GetTable().SetColorerFn(render.Rbac{}.ColorerFunc())
-	r.SetBindKeysFn(r.bindKeys)
+	r.AddBindKeysFn(r.bindKeys)
 	r.GetTable().SetSortCol("APIGROUP", true)
 	r.GetTable().SetEnterFn(blankEnterFn)
 
@@ -37,14 +35,14 @@ func (r *Rbac) bindKeys(aa ui.KeyActions) {
 
 func showRules(app *App, _ ui.Tabular, gvr, path string) {
 	v := NewRbac(client.NewGVR("rbac"))
-	v.SetContextFn(rbacCtxt(gvr, path))
+	v.SetContextFn(rbacCtx(gvr, path))
 
-	if err := app.inject(v); err != nil {
+	if err := app.inject(v, false); err != nil {
 		app.Flash().Err(err)
 	}
 }
 
-func rbacCtxt(gvr, path string) ContextFunc {
+func rbacCtx(gvr, path string) ContextFunc {
 	return func(ctx context.Context) context.Context {
 		ctx = context.WithValue(ctx, internal.KeyPath, path)
 		return context.WithValue(ctx, internal.KeyGVR, gvr)

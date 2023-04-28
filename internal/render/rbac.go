@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gdamore/tcell"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -30,13 +29,13 @@ var (
 )
 
 // Rbac renders a rbac to screen.
-type Rbac struct{}
+type Rbac struct {
+	Base
+}
 
 // ColorerFunc colors a resource row.
 func (Rbac) ColorerFunc() ColorerFunc {
-	return func(_ string, _ Header, _re RowEvent) tcell.Color {
-		return tcell.ColorMediumSpringGreen
-	}
+	return DefaultColorer
 }
 
 // Header returns a header row.
@@ -101,7 +100,7 @@ func toVerbIcon(ok bool) string {
 	if ok {
 		return "[green::b] ✓ [::]"
 	}
-	return "[orangered::b] 𐄂 [::]"
+	return "[orangered::b] × [::]"
 }
 
 func hasVerb(verbs []string, verb string) bool {
@@ -164,7 +163,7 @@ func (rr Rules) Upsert(r RuleRes) Rules {
 	return rr
 }
 
-// Find locates a row by id. Retturns false is not found.
+// Find locates a row by id. Returns false is not found.
 func (rr Rules) find(res string) (int, bool) {
 	for i, r := range rr {
 		if r.Resource == res {

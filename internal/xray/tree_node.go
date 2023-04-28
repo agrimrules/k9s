@@ -8,8 +8,8 @@ import (
 
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/dao"
+	"github.com/fvbommel/sortorder"
 	"github.com/rs/zerolog/log"
-	"vbom.ml/util/sortorder"
 )
 
 const (
@@ -19,7 +19,7 @@ const (
 	// KeySAAutomount indicates whether an automount sa token is active or not.
 	KeySAAutomount TreeRef = "automount"
 
-	// PathSeparator represents a node path separatot.
+	// PathSeparator represents a node path separator.
 	PathSeparator = "::"
 
 	// StatusKey status map key.
@@ -102,21 +102,21 @@ func (s NodeSpec) AsStatus() string {
 
 // ----------------------------------------------------------------------------
 
-// Childrens represents a collection of children nodes.
-type Childrens []*TreeNode
+// ChildNodes represents a collection of children nodes.
+type ChildNodes []*TreeNode
 
 // Len returns the list size.
-func (c Childrens) Len() int {
+func (c ChildNodes) Len() int {
 	return len(c)
 }
 
 // Swap swaps list values.
-func (c Childrens) Swap(i, j int) {
+func (c ChildNodes) Swap(i, j int) {
 	c[i], c[j] = c[j], c[i]
 }
 
 // Less returns true if i < j.
-func (c Childrens) Less(i, j int) bool {
+func (c ChildNodes) Less(i, j int) bool {
 	id1, id2 := c[i].ID, c[j].ID
 
 	return sortorder.NaturalLess(id1, id2)
@@ -127,7 +127,7 @@ func (c Childrens) Less(i, j int) bool {
 // TreeNode represents a resource tree node.
 type TreeNode struct {
 	GVR, ID  string
-	Children Childrens
+	Children ChildNodes
 	Parent   *TreeNode
 	Extras   map[string]string
 }
@@ -146,7 +146,7 @@ func (t *TreeNode) CountChildren() int {
 	return len(t.Children)
 }
 
-// Count all the nodes from this node
+// Count all the nodes from this node.
 func (t *TreeNode) Count(gvr string) int {
 	counter := 0
 	if t.GVR == gvr || gvr == "" {
@@ -205,7 +205,7 @@ func (t *TreeNode) Spec() NodeSpec {
 
 // Flatten returns a collection of node specs.
 func (t *TreeNode) Flatten() []NodeSpec {
-	var refs []NodeSpec
+	refs := make([]NodeSpec, 0, len(t.Children))
 	for _, c := range t.Children {
 		if c.IsLeaf() {
 			refs = append(refs, c.Spec())

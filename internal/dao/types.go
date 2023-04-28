@@ -33,7 +33,7 @@ type Factory interface {
 	List(gvr, ns string, wait bool, sel labels.Selector) ([]runtime.Object, error)
 
 	// ForResource fetch an informer for a given resource.
-	ForResource(ns, gvr string) informers.GenericInformer
+	ForResource(ns, gvr string) (informers.GenericInformer, error)
 
 	// CanForResource fetch an informer for a given resource if authorized
 	CanForResource(ns, gvr string, verbs []string) (informers.GenericInformer, error)
@@ -77,7 +77,7 @@ type DrainOptions struct {
 	GracePeriodSeconds  int
 	Timeout             time.Duration
 	IgnoreAllDaemonSets bool
-	DeleteLocalData     bool
+	DeleteEmptyDirData  bool
 	Force               bool
 }
 
@@ -93,7 +93,7 @@ type NodeMaintainer interface {
 // Loggable represents resources with logs.
 type Loggable interface {
 	// TaiLogs streams resource logs.
-	TailLogs(ctx context.Context, c LogChan, opts LogOptions) error
+	TailLogs(ctx context.Context, opts *LogOptions) ([]LogChan, error)
 }
 
 // Describer describes a resource.
@@ -102,7 +102,7 @@ type Describer interface {
 	Describe(path string) (string, error)
 
 	// ToYAML dumps a resource to YAML.
-	ToYAML(path string) (string, error)
+	ToYAML(path string, showManaged bool) (string, error)
 }
 
 // Scalable represents resources that can scale.
@@ -120,7 +120,7 @@ type Controller interface {
 // Nuker represents a resource deleter.
 type Nuker interface {
 	// Delete removes a resource from the api server.
-	Delete(path string, cascade, force bool) error
+	Delete(context.Context, string, *metav1.DeletionPropagation, Grace) error
 }
 
 // Switchable represents a switchable resource.
@@ -145,4 +145,13 @@ type Runnable interface {
 type Logger interface {
 	// Logs tails a resource logs.
 	Logs(path string, opts *v1.PodLogOptions) (*restclient.Request, error)
+}
+
+// ContainsPodSpec represents a resource with a pod template.
+type ContainsPodSpec interface {
+	// Get PodSpec of a resource
+	GetPodSpec(path string) (*v1.PodSpec, error)
+
+	// Set Images for a resource
+	SetImages(ctx context.Context, path string, imageSpecs ImageSpecs) error
 }

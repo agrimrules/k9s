@@ -1,8 +1,6 @@
 package view
 
 import (
-	"strings"
-
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/ui"
 )
@@ -45,15 +43,28 @@ func coreViewers(vv MetaViewers) {
 	vv[client.NewGVR("v1/secrets")] = MetaViewer{
 		viewerFn: NewSecret,
 	}
+	vv[client.NewGVR("scheduling.k8s.io/v1/priorityclasses")] = MetaViewer{
+		viewerFn: NewPriorityClass,
+	}
+	vv[client.NewGVR("v1/configmaps")] = MetaViewer{
+		viewerFn: NewConfigMap,
+	}
+	vv[client.NewGVR("v1/serviceaccounts")] = MetaViewer{
+		viewerFn: NewServiceAccount,
+	}
+	vv[client.NewGVR("v1/persistentvolumeclaims")] = MetaViewer{
+		viewerFn: NewPersistentVolumeClaim,
+	}
 }
 
 func miscViewers(vv MetaViewers) {
 	vv[client.NewGVR("contexts")] = MetaViewer{
 		viewerFn: NewContext,
 	}
-	vv[client.NewGVR("openfaas")] = MetaViewer{
-		viewerFn: NewOpenFaas,
-	}
+	// BOZO!! revamp with latest...
+	// vv[client.NewGVR("openfaas")] = MetaViewer{
+	// 	viewerFn: NewOpenFaas,
+	// }
 	vv[client.NewGVR("containers")] = MetaViewer{
 		viewerFn: NewContainer,
 	}
@@ -69,6 +80,9 @@ func miscViewers(vv MetaViewers) {
 	vv[client.NewGVR("aliases")] = MetaViewer{
 		viewerFn: NewAlias,
 	}
+	vv[client.NewGVR("references")] = MetaViewer{
+		viewerFn: NewReference,
+	}
 	vv[client.NewGVR("pulses")] = MetaViewer{
 		viewerFn: NewPulse,
 	}
@@ -78,7 +92,6 @@ func miscViewers(vv MetaViewers) {
 	vv[client.NewGVR("sanitizer")] = MetaViewer{
 		viewerFn: NewSanitizer,
 	}
-
 }
 
 func appsViewers(vv MetaViewers) {
@@ -94,7 +107,7 @@ func appsViewers(vv MetaViewers) {
 	vv[client.NewGVR("apps/v1/daemonsets")] = MetaViewer{
 		viewerFn: NewDaemonSet,
 	}
-	vv[client.NewGVR("extensions/v1beta1/daemonsets")] = MetaViewer{
+	vv[client.NewGVR("apps/v1/daemonsets")] = MetaViewer{
 		viewerFn: NewDaemonSet,
 	}
 }
@@ -127,6 +140,9 @@ func batchViewers(vv MetaViewers) {
 	vv[client.NewGVR("batch/v1beta1/cronjobs")] = MetaViewer{
 		viewerFn: NewCronJob,
 	}
+	vv[client.NewGVR("batch/v1/cronjobs")] = MetaViewer{
+		viewerFn: NewCronJob,
+	}
 	vv[client.NewGVR("batch/v1/jobs")] = MetaViewer{
 		viewerFn: NewJob,
 	}
@@ -136,15 +152,9 @@ func extViewers(vv MetaViewers) {
 	vv[client.NewGVR("apiextensions.k8s.io/v1/customresourcedefinitions")] = MetaViewer{
 		enterFn: showCRD,
 	}
-	vv[client.NewGVR("apiextensions.k8s.io/v1beta1/customresourcedefinitions")] = MetaViewer{
-		enterFn: showCRD,
-	}
 }
 
 func showCRD(app *App, _ ui.Tabular, _, path string) {
-	_, crdGVR := client.Namespaced(path)
-	tokens := strings.Split(crdGVR, ".")
-	if err := app.gotoResource(tokens[0], "", false); err != nil {
-		app.Flash().Err(err)
-	}
+	_, crd := client.Namespaced(path)
+	app.gotoResource(crd, "", false)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/derailed/k9s/internal"
+	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -18,6 +19,19 @@ type CustomResourceDefinition struct {
 	Resource
 }
 
+// IsHappy check for happy deployments.
+func (c *CustomResourceDefinition) IsHappy(crd v1.CustomResourceDefinition) bool {
+	versions := make([]string, 0, 3)
+	for _, v := range crd.Spec.Versions {
+		if v.Served && !v.Deprecated {
+			versions = append(versions, v.Name)
+			break
+		}
+	}
+
+	return len(versions) > 0
+}
+
 // List returns a collection of nodes.
 func (c *CustomResourceDefinition) List(ctx context.Context, _ string) ([]runtime.Object, error) {
 	strLabel, ok := ctx.Value(internal.KeyLabels).(string)
@@ -26,6 +40,6 @@ func (c *CustomResourceDefinition) List(ctx context.Context, _ string) ([]runtim
 		labelSel = sel.AsSelector()
 	}
 
-	const gvr = "apiextensions.k8s.io/v1beta1/customresourcedefinitions"
-	return c.Factory.List(gvr, "-", true, labelSel)
+	const gvr = "apiextensions.k8s.io/v1/customresourcedefinitions"
+	return c.GetFactory().List(gvr, "-", false, labelSel)
 }

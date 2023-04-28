@@ -8,6 +8,57 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestIsReadOnly(t *testing.T) {
+	uu := map[string]struct {
+		config      string
+		read, write bool
+		readOnly    bool
+	}{
+		"writable": {
+			config: "k9s.yml",
+		},
+		"writable_read_override": {
+			config:   "k9s.yml",
+			read:     true,
+			readOnly: true,
+		},
+		"writable_write_override": {
+			config: "k9s.yml",
+			write:  true,
+		},
+		"readonly": {
+			config:   "k9s_readonly.yml",
+			readOnly: true,
+		},
+		"readonly_read_override": {
+			config:   "k9s_readonly.yml",
+			read:     true,
+			readOnly: true,
+		},
+		"readonly_write_override": {
+			config: "k9s_readonly.yml",
+			write:  true,
+		},
+		"readonly_both_override": {
+			config: "k9s_readonly.yml",
+			read:   true,
+			write:  true,
+		},
+	}
+
+	mk := NewMockKubeSettings()
+	cfg := config.NewConfig(mk)
+	for k := range uu {
+		u := uu[k]
+		t.Run(k, func(t *testing.T) {
+			assert.Nil(t, cfg.Load("testdata/"+u.config))
+			cfg.K9s.OverrideReadOnly(u.read)
+			cfg.K9s.OverrideWrite(u.write)
+			assert.Equal(t, u.readOnly, cfg.K9s.IsReadOnly())
+		})
+	}
+}
+
 func TestK9sValidate(t *testing.T) {
 	mc := NewMockConnection()
 	m.When(mc.ValidNamespaces()).ThenReturn(namespaces(), nil)
@@ -15,7 +66,7 @@ func TestK9sValidate(t *testing.T) {
 	mk := NewMockKubeSettings()
 	m.When(mk.CurrentContextName()).ThenReturn("ctx1", nil)
 	m.When(mk.CurrentClusterName()).ThenReturn("c1", nil)
-	m.When(mk.ClusterNames()).ThenReturn([]string{"c1", "c2"}, nil)
+	m.When(mk.ClusterNames()).ThenReturn(map[string]struct{}{"c1": {}, "c2": {}}, nil)
 	m.When(mk.NamespaceNames(namespaces())).ThenReturn([]string{"default"})
 
 	c := config.NewK9s()
@@ -27,6 +78,7 @@ func TestK9sValidate(t *testing.T) {
 	assert.Equal(t, "ctx1", c.CurrentContext)
 	assert.Equal(t, "c1", c.CurrentCluster)
 	assert.Equal(t, 1, len(c.Clusters))
+	assert.Equal(t, config.K9sDefaultScreenDumpDir, c.GetScreenDumpDir())
 	_, ok := c.Clusters[c.CurrentCluster]
 	assert.True(t, ok)
 }
@@ -38,7 +90,7 @@ func TestK9sValidateBlank(t *testing.T) {
 	mk := NewMockKubeSettings()
 	m.When(mk.CurrentContextName()).ThenReturn("ctx1", nil)
 	m.When(mk.CurrentClusterName()).ThenReturn("c1", nil)
-	m.When(mk.ClusterNames()).ThenReturn([]string{"c1", "c2"}, nil)
+	m.When(mk.ClusterNames()).ThenReturn(map[string]struct{}{"c1": {}, "c2": {}}, nil)
 	m.When(mk.NamespaceNames(namespaces())).ThenReturn([]string{"default"})
 
 	var c config.K9s
@@ -78,4 +130,39 @@ func TestK9sActiveCluster(t *testing.T) {
 	assert.NotNil(t, cl)
 	assert.Equal(t, "kube-system", cl.Namespace.Active)
 	assert.Equal(t, 5, len(cl.Namespace.Favorites))
+}
+
+func TestGetScreenDumpDir(t *testing.T) {
+	mk := NewMockKubeSettings()
+	cfg := config.NewConfig(mk)
+	assert.Nil(t, cfg.Load("testdata/k9s.yml"))
+
+	assert.Equal(t, "/tmp", cfg.K9s.GetScreenDumpDir())
+}
+
+func TestGetScreenDumpDirOverride(t *testing.T) {
+	mk := NewMockKubeSettings()
+	cfg := config.NewConfig(mk)
+	assert.Nil(t, cfg.Load("testdata/k9s.yml"))
+	cfg.K9s.OverrideScreenDumpDir("/override")
+
+	assert.Equal(t, "/override", cfg.K9s.GetScreenDumpDir())
+}
+
+func TestGetScreenDumpDirOverrideEmpty(t *testing.T) {
+	mk := NewMockKubeSettings()
+	cfg := config.NewConfig(mk)
+	assert.Nil(t, cfg.Load("testdata/k9s.yml"))
+	cfg.K9s.OverrideScreenDumpDir("")
+
+	assert.Equal(t, "/tmp", cfg.K9s.GetScreenDumpDir())
+}
+
+func TestGetScreenDumpDirEmpty(t *testing.T) {
+	mk := NewMockKubeSettings()
+	cfg := config.NewConfig(mk)
+	assert.Nil(t, cfg.Load("testdata/k9s1.yml"))
+	cfg.K9s.OverrideScreenDumpDir("")
+
+	assert.Equal(t, config.K9sDefaultScreenDumpDir, cfg.K9s.GetScreenDumpDir())
 }

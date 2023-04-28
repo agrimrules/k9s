@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/derailed/k9s/internal/client"
@@ -21,11 +22,8 @@ const (
 )
 
 // Node renders a K8s Node to screen.
-type Node struct{}
-
-// ColorerFunc colors a resource row.
-func (n Node) ColorerFunc() ColorerFunc {
-	return DefaultColorer
+type Node struct {
+	Base
 }
 
 // Header returns a header row.
@@ -38,15 +36,16 @@ func (Node) Header(_ string) Header {
 		HeaderColumn{Name: "KERNEL", Wide: true},
 		HeaderColumn{Name: "INTERNAL-IP", Wide: true},
 		HeaderColumn{Name: "EXTERNAL-IP", Wide: true},
+		HeaderColumn{Name: "PODS", Align: tview.AlignRight},
 		HeaderColumn{Name: "CPU", Align: tview.AlignRight, MX: true},
 		HeaderColumn{Name: "MEM", Align: tview.AlignRight, MX: true},
 		HeaderColumn{Name: "%CPU", Align: tview.AlignRight, MX: true},
 		HeaderColumn{Name: "%MEM", Align: tview.AlignRight, MX: true},
-		HeaderColumn{Name: "ACPU", Align: tview.AlignRight, MX: true},
-		HeaderColumn{Name: "AMEM", Align: tview.AlignRight, MX: true},
+		HeaderColumn{Name: "CPU/A", Align: tview.AlignRight, MX: true},
+		HeaderColumn{Name: "MEM/A", Align: tview.AlignRight, MX: true},
 		HeaderColumn{Name: "LABELS", Wide: true},
 		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		HeaderColumn{Name: "AGE", Time: true},
 	}
 }
 
@@ -56,7 +55,6 @@ func (n Node) Render(o interface{}, ns string, r *Row) error {
 	if !ok {
 		return fmt.Errorf("Expected *NodeAndMetrics, but got %T", o)
 	}
-
 	meta, ok := oo.Raw.Object["metadata"].(map[string]interface{})
 	if !ok {
 		return fmt.Errorf("Unable to extract meta")
@@ -71,10 +69,9 @@ func (n Node) Render(o interface{}, ns string, r *Row) error {
 	iIP, eIP := getIPs(no.Status.Addresses)
 	iIP, eIP = missing(iIP), missing(eIP)
 
-	c, a, p := gatherNodeMX(&no, oo.MX)
-
+	c, a := gatherNodeMX(&no, oo.MX)
 	statuses := make(sort.StringSlice, 10)
-	status(no.Status, no.Spec.Unschedulable, statuses)
+	status(no.Status.Conditions, no.Spec.Unschedulable, statuses)
 	sort.Sort(statuses)
 	roles := make(sort.StringSlice, 10)
 	nodeRoles(&no, roles)
@@ -89,15 +86,16 @@ func (n Node) Render(o interface{}, ns string, r *Row) error {
 		no.Status.NodeInfo.KernelVersion,
 		iIP,
 		eIP,
-		c.cpu,
-		c.mem,
-		p.cpu,
-		p.mem,
-		a.cpu,
-		a.mem,
+		strconv.Itoa(oo.PodCount),
+		toMc(c.cpu),
+		toMi(c.mem),
+		client.ToPercentageStr(c.cpu, a.cpu),
+		client.ToPercentageStr(c.mem, a.mem),
+		toMc(a.cpu),
+		toMi(a.mem),
 		mapToStr(no.Labels),
 		asStatus(n.diagnose(statuses)),
-		toAge(no.ObjectMeta.CreationTimestamp),
+		toAge(no.GetCreationTimestamp()),
 	}
 
 	return nil
@@ -133,8 +131,9 @@ func (Node) diagnose(ss []string) error {
 
 // NodeWithMetrics represents a node with its associated metrics.
 type NodeWithMetrics struct {
-	Raw *unstructured.Unstructured
-	MX  *mv1beta1.NodeMetrics
+	Raw      *unstructured.Unstructured
+	MX       *mv1beta1.NodeMetrics
+	PodCount int
 }
 
 // GetObjectKind returns a schema object.
@@ -147,27 +146,15 @@ func (n *NodeWithMetrics) DeepCopyObject() runtime.Object {
 	return n
 }
 
-func gatherNodeMX(no *v1.Node, mx *mv1beta1.NodeMetrics) (c metric, a metric, p metric) {
-	c, a, p = noMetric(), noMetric(), noMetric()
-	if mx == nil {
-		return
-	}
+type metric struct {
+	cpu, mem   int64
+	lcpu, lmem int64
+}
 
-	cpu, mem := mx.Usage.Cpu().MilliValue(), client.ToMB(mx.Usage.Memory().Value())
-	c = metric{
-		cpu: ToMillicore(cpu),
-		mem: ToMi(mem),
-	}
-
-	acpu, amem := no.Status.Allocatable.Cpu().MilliValue(), client.ToMB(no.Status.Allocatable.Memory().Value())
-	a = metric{
-		cpu: ToMillicore(acpu),
-		mem: ToMi(amem),
-	}
-
-	p = metric{
-		cpu: IntToStr(client.ToPercentage(cpu, acpu)),
-		mem: IntToStr(client.ToPercentage(mem, amem)),
+func gatherNodeMX(no *v1.Node, mx *mv1beta1.NodeMetrics) (c, a metric) {
+	a.cpu, a.mem = no.Status.Allocatable.Cpu().MilliValue(), no.Status.Allocatable.Memory().Value()
+	if mx != nil {
+		c.cpu, c.mem = mx.Usage.Cpu().MilliValue(), mx.Usage.Memory().Value()
 	}
 
 	return
@@ -198,6 +185,7 @@ func nodeRoles(node *v1.Node, res []string) {
 
 func getIPs(addrs []v1.NodeAddress) (iIP, eIP string) {
 	for _, a := range addrs {
+		// nolint:exhaustive
 		switch a.Type {
 		case v1.NodeExternalIP:
 			eIP = a.Address
@@ -209,11 +197,11 @@ func getIPs(addrs []v1.NodeAddress) (iIP, eIP string) {
 	return
 }
 
-func status(status v1.NodeStatus, exempt bool, res []string) {
+func status(conds []v1.NodeCondition, exempt bool, res []string) {
 	var index int
-	conditions := make(map[v1.NodeConditionType]*v1.NodeCondition)
-	for n := range status.Conditions {
-		cond := status.Conditions[n]
+	conditions := make(map[v1.NodeConditionType]*v1.NodeCondition, len(conds))
+	for n := range conds {
+		cond := conds[n]
 		conditions[cond.Type] = &cond
 	}
 
@@ -229,7 +217,6 @@ func status(status v1.NodeStatus, exempt bool, res []string) {
 		}
 		res[index] = neg + string(condition.Type)
 		index++
-
 	}
 	if len(res) == 0 {
 		res[index] = "Unknown"

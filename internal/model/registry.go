@@ -7,20 +7,29 @@ import (
 )
 
 // Registry tracks resources metadata.
-// BOZO!! Break up deps and merge into single registrar
+// BOZO!! Break up deps and merge into single registrar.
 var Registry = map[string]ResourceMeta{
 	// Custom...
-	"helm": {
-		DAO:      &dao.Helm{},
-		Renderer: &render.Helm{},
+	"references": {
+		DAO:      &dao.Reference{},
+		Renderer: &render.Reference{},
+	},
+	"dir": {
+		DAO:      &dao.Dir{},
+		Renderer: &render.Dir{},
 	},
 	"pulses": {
 		DAO: &dao.Pulse{},
 	},
-	"openfaas": {
-		DAO:      &dao.OpenFaas{},
-		Renderer: &render.OpenFaas{},
+	"helm": {
+		DAO:      &dao.Helm{},
+		Renderer: &render.Helm{},
 	},
+	// BOZO!! revamp with latest...
+	// "openfaas": {
+	// 	DAO:      &dao.OpenFaas{},
+	// 	Renderer: &render.OpenFaas{},
+	// },
 	"containers": {
 		DAO:          &dao.Container{},
 		Renderer:     &render.Container{},
@@ -75,9 +84,6 @@ var Registry = map[string]ResourceMeta{
 	"v1/endpoints": {
 		Renderer: &render.Endpoints{},
 	},
-	"v1/events": {
-		Renderer: &render.Event{},
-	},
 	"v1/pods": {
 		DAO:          &dao.Pod{},
 		Renderer:     &render.Pod{},
@@ -104,6 +110,10 @@ var Registry = map[string]ResourceMeta{
 	"v1/persistentvolumeclaims": {
 		Renderer: &render.PersistentVolumeClaim{},
 	},
+	"v1/events": {
+		DAO:      &dao.Table{},
+		Renderer: &render.Event{},
+	},
 
 	// Apps...
 	"apps/v1/deployments": {
@@ -127,21 +137,12 @@ var Registry = map[string]ResourceMeta{
 	},
 
 	// Extensions...
-	"extensions/v1beta1/daemonsets": {
-		Renderer: &render.DaemonSet{},
-	},
-	"extensions/v1beta1/ingresses": {
-		Renderer: &render.Ingress{},
-	},
-	"extensions/v1beta1/networkpolicies": {
-		Renderer: &render.NetworkPolicy{},
-	},
 	"networking.k8s.io/v1/networkpolicies": {
 		Renderer: &render.NetworkPolicy{},
 	},
 
 	// Batch...
-	"batch/v1beta1/cronjobs": {
+	"batch/v1/cronjobs": {
 		DAO:      &dao.CronJob{},
 		Renderer: &render.CronJob{},
 	},
@@ -150,25 +151,8 @@ var Registry = map[string]ResourceMeta{
 		Renderer: &render.Job{},
 	},
 
-	// Autoscaling...
-	"autoscaling/v1/horizontalpodautoscalers": {
-		DAO:      &dao.HorizontalPodAutoscaler{},
-		Renderer: &render.HorizontalPodAutoscaler{},
-	},
-	"autoscaling/v2beta1/horizontalpodautoscalers": {
-		DAO:      &dao.HorizontalPodAutoscaler{},
-		Renderer: &render.HorizontalPodAutoscaler{},
-	},
-	"autoscaling/v2beta2/horizontalpodautoscalers": {
-		DAO:      &dao.HorizontalPodAutoscaler{},
-		Renderer: &render.HorizontalPodAutoscaler{},
-	},
-
 	// CRDs...
 	"apiextensions.k8s.io/v1/customresourcedefinitions": {
-		Renderer: &render.CustomResourceDefinition{},
-	},
-	"apiextensions.k8s.io/v1beta1/customresourcedefinitions": {
 		Renderer: &render.CustomResourceDefinition{},
 	},
 

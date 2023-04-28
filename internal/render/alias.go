@@ -5,19 +5,13 @@ import (
 	"strings"
 
 	"github.com/derailed/k9s/internal/client"
-	"github.com/gdamore/tcell"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // Alias renders a aliases to screen.
-type Alias struct{}
-
-// ColorerFunc colors a resource row.
-func (Alias) ColorerFunc() ColorerFunc {
-	return func(ns string, _ Header, re RowEvent) tcell.Color {
-		return tcell.ColorMediumSpringGreen
-	}
+type Alias struct {
+	Base
 }
 
 // Header returns a header row.

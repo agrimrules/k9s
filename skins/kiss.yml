@@ -4,9 +4,22 @@ k9s:
     fgColor: default
     bgColor: default
     logoColor: default
+  prompt:
+    fgColor: default
+    bgColor: default
+    suggestColor: default
   info:
     fgColor: default
     sectionColor: default
+  dialog:
+    fgColor: default
+    bgColor: default
+    buttonFgColor: default
+    buttonBgColor: default
+    buttonFocusFgColor: default
+    buttonFocusBgColor: default
+    labelFgColor: default
+    fieldFgColor: default
   frame:
     border:
       fgColor: default
@@ -24,7 +37,7 @@ k9s:
       modifyColor: default
       addColor: default
       errorColor: default
-      highlightcolor: default
+      highlightColor: default
       killColor: default
       completedColor: default
     title:
@@ -37,7 +50,8 @@ k9s:
     table:
       fgColor: default
       bgColor: default
-      cursorColor: default
+      cursorFgColor: default
+      cursorBfColor: default
       header:
         fgColor: default
         bgColor: default
@@ -49,3 +63,6 @@ k9s:
     logs:
       fgColor: default
       bgColor: default
+      indicator:
+        fgColor: default
+        bgColor: default

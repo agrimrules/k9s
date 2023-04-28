@@ -5,7 +5,7 @@ import (
 	"strconv"
 
 	"github.com/derailed/k9s/internal/client"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 	"helm.sh/helm/v3/pkg/release"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -14,6 +14,11 @@ import (
 
 // Helm renders a helm chart to screen.
 type Helm struct{}
+
+// IsGeneric identifies a generic handler.
+func (Helm) IsGeneric() bool {
+	return false
+}
 
 // ColorerFunc colors a resource row.
 func (Helm) ColorerFunc() ColorerFunc {
@@ -36,7 +41,7 @@ func (Helm) Header(_ string) Header {
 		HeaderColumn{Name: "CHART"},
 		HeaderColumn{Name: "APP VERSION"},
 		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		HeaderColumn{Name: "AGE", Time: true},
 	}
 }
 

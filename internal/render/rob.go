@@ -11,11 +11,8 @@ import (
 )
 
 // RoleBinding renders a K8s RoleBinding to screen.
-type RoleBinding struct{}
-
-// ColorerFunc colors a resource row.
-func (RoleBinding) ColorerFunc() ColorerFunc {
-	return DefaultColorer
+type RoleBinding struct {
+	Base
 }
 
 // Header returns a header rbw.
@@ -32,7 +29,7 @@ func (RoleBinding) Header(ns string) Header {
 		HeaderColumn{Name: "SUBJECTS"},
 		HeaderColumn{Name: "LABELS", Wide: true},
 		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		HeaderColumn{Name: "AGE", Time: true},
 	)
 }
 
@@ -62,7 +59,7 @@ func (r RoleBinding) Render(o interface{}, ns string, row *Row) error {
 		ss,
 		mapToStr(rb.Labels),
 		"",
-		toAge(rb.ObjectMeta.CreationTimestamp),
+		toAge(rb.GetCreationTimestamp()),
 	)
 
 	return nil
@@ -76,7 +73,7 @@ func renderSubjects(ss []rbacv1.Subject) (kind string, subjects string) {
 		return NAValue, ""
 	}
 
-	var tt []string
+	tt := make([]string, 0, len(ss))
 	for _, s := range ss {
 		kind = toSubjectAlias(s.Kind)
 		tt = append(tt, s.Name)

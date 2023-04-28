@@ -10,7 +10,9 @@ import (
 )
 
 // Section represents an xray renderer.
-type Section struct{}
+type Section struct {
+	render.Base
+}
 
 // Render renders an xray node.
 func (s *Section) Render(ctx context.Context, ns string, o interface{}) error {
@@ -56,6 +58,7 @@ func (*Section) outcomeRefs(parent *TreeNode, section render.Section) {
 
 func colorize(s string, l config.Level) string {
 	c := "green"
+	// nolint:exhaustive
 	switch l {
 	case config.ErrorLevel:
 		c = "red"

@@ -6,14 +6,18 @@ import (
 	"strings"
 
 	"github.com/derailed/k9s/internal/client"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+const terminatingPhase = "Terminating"
+
 // PersistentVolume renders a K8s PersistentVolume to screen.
-type PersistentVolume struct{}
+type PersistentVolume struct {
+	Base
+}
 
 // ColorerFunc colors a resource row.
 func (p PersistentVolume) ColorerFunc() ColorerFunc {
@@ -22,19 +26,19 @@ func (p PersistentVolume) ColorerFunc() ColorerFunc {
 			return ErrColor
 		}
 
-		if re.Kind == EventAdd || re.Kind == EventUpdate {
-			return DefaultColorer(ns, h, re)
-		}
-
 		statusCol := h.IndexOf("STATUS", true)
 		if statusCol == -1 {
 			return DefaultColorer(ns, h, re)
 		}
 		switch strings.TrimSpace(re.Row.Fields[statusCol]) {
-		case "Bound":
+		case string(v1.VolumeBound):
 			return StdColor
-		case "Available":
-			return tcell.ColorYellow
+		case string(v1.VolumeAvailable):
+			return tcell.ColorGreen
+		case string(v1.VolumePending):
+			return PendingColor
+		case terminatingPhase:
+			return CompletedColor
 		}
 
 		return DefaultColorer(ns, h, re)
@@ -55,7 +59,7 @@ func (PersistentVolume) Header(string) Header {
 		HeaderColumn{Name: "VOLUMEMODE", Wide: true},
 		HeaderColumn{Name: "LABELS", Wide: true},
 		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		HeaderColumn{Name: "AGE", Time: true},
 	}
 }
 
@@ -73,7 +77,7 @@ func (p PersistentVolume) Render(o interface{}, ns string, r *Row) error {
 
 	phase := pv.Status.Phase
 	if pv.ObjectMeta.DeletionTimestamp != nil {
-		phase = "Terminated"
+		phase = terminatingPhase
 	}
 	var claim string
 	if pv.Spec.ClaimRef != nil {
@@ -92,14 +96,14 @@ func (p PersistentVolume) Render(o interface{}, ns string, r *Row) error {
 		size.String(),
 		accessMode(pv.Spec.AccessModes),
 		string(pv.Spec.PersistentVolumeReclaimPolicy),
-		string(pv.Status.Phase),
+		string(phase),
 		claim,
 		class,
 		pv.Status.Reason,
 		p.volumeMode(pv.Spec.VolumeMode),
 		mapToStr(pv.Labels),
 		asStatus(p.diagnose(phase)),
-		toAge(pv.ObjectMeta.CreationTimestamp),
+		toAge(pv.GetCreationTimestamp()),
 	}
 
 	return nil
@@ -109,6 +113,7 @@ func (PersistentVolume) diagnose(phase v1.PersistentVolumePhase) error {
 	if phase == v1.VolumeFailed {
 		return fmt.Errorf("failed to delete or recycle")
 	}
+
 	return nil
 }
 
@@ -126,14 +131,16 @@ func (PersistentVolume) volumeMode(m *v1.PersistentVolumeMode) string {
 func accessMode(aa []v1.PersistentVolumeAccessMode) string {
 	dd := accessDedup(aa)
 	s := make([]string, 0, len(dd))
-	for i := 0; i < len(aa); i++ {
-		switch {
-		case accessContains(dd, v1.ReadWriteOnce):
+	for _, am := range dd {
+		switch am {
+		case v1.ReadWriteOnce:
 			s = append(s, "RWO")
-		case accessContains(dd, v1.ReadOnlyMany):
+		case v1.ReadOnlyMany:
 			s = append(s, "ROX")
-		case accessContains(dd, v1.ReadWriteMany):
+		case v1.ReadWriteMany:
 			s = append(s, "RWX")
+		case v1.ReadWriteOncePod:
+			s = append(s, "RWOP")
 		}
 	}
 

@@ -12,11 +12,8 @@ import (
 )
 
 // DaemonSet renders a K8s DaemonSet to screen.
-type DaemonSet struct{}
-
-// ColorerFunc colors a resource row.
-func (d DaemonSet) ColorerFunc() ColorerFunc {
-	return DefaultColorer
+type DaemonSet struct {
+	Base
 }
 
 // Header returns a header row.
@@ -31,7 +28,7 @@ func (DaemonSet) Header(ns string) Header {
 		HeaderColumn{Name: "AVAILABLE", Align: tview.AlignRight},
 		HeaderColumn{Name: "LABELS", Wide: true},
 		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		HeaderColumn{Name: "AGE", Time: true},
 	}
 }
 
@@ -58,13 +55,13 @@ func (d DaemonSet) Render(o interface{}, ns string, r *Row) error {
 		strconv.Itoa(int(ds.Status.NumberAvailable)),
 		mapToStr(ds.Labels),
 		asStatus(d.diagnose(ds.Status.DesiredNumberScheduled, ds.Status.NumberReady)),
-		toAge(ds.ObjectMeta.CreationTimestamp),
+		toAge(ds.GetCreationTimestamp()),
 	}
 
 	return nil
 }
 
-// Happy returns true if resoure is happy, false otherwise
+// Happy returns true if resource is happy, false otherwise.
 func (DaemonSet) diagnose(d, r int32) error {
 	if d != r {
 		return fmt.Errorf("desiring %d replicas but %d ready", d, r)

@@ -5,8 +5,8 @@ import (
 
 	"github.com/derailed/k9s/internal/model"
 	"github.com/derailed/k9s/internal/ui"
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
 )
 
 // Picker represents a container picker.
@@ -47,6 +47,11 @@ func (p *Picker) Init(ctx context.Context) error {
 	})
 
 	return nil
+}
+
+// InCmdMode checks if prompt is active.
+func (*Picker) InCmdMode() bool {
+	return false
 }
 
 // Start starts the view.

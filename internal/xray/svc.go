@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/derailed/k9s/internal"
-
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/dao"
 	"github.com/derailed/k9s/internal/render"
@@ -75,7 +74,7 @@ func (s *Service) locatePods(ctx context.Context, ns string, sel map[string]stri
 		return nil, fmt.Errorf("Expecting a factory but got %T", ctx.Value(internal.KeyFactory))
 	}
 
-	var ll []string
+	ll := make([]string, 0, len(sel))
 	for k, v := range sel {
 		ll = append(ll, fmt.Sprintf("%s=%s", k, v))
 	}

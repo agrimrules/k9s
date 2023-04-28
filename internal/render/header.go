@@ -8,7 +8,7 @@ import (
 
 const ageCol = "AGE"
 
-// HeaderColumn represent a table header
+// HeaderColumn represent a table header.
 type HeaderColumn struct {
 	Name      string
 	Align     int
@@ -129,7 +129,7 @@ func (h Header) Columns(wide bool) []string {
 	if len(h) == 0 {
 		return nil
 	}
-	var cc []string
+	cc := make([]string, 0, len(h))
 	for _, c := range h {
 		if !wide && c.Wide {
 			continue
@@ -145,11 +145,21 @@ func (h Header) HasAge() bool {
 	return h.IndexOf(ageCol, true) != -1
 }
 
-// IsAgeCol checks if given column index is the age column.
-func (h Header) IsAgeCol(col int) bool {
-	if !h.HasAge() || col >= len(h) {
+// IsMetricsCol checks if given column index represents metrics.
+func (h Header) IsMetricsCol(col int) bool {
+	if col < 0 || col >= len(h) {
 		return false
 	}
+
+	return h[col].MX
+}
+
+// IsTimeCol checks if given column index represents a timestamp.
+func (h Header) IsTimeCol(col int) bool {
+	if col < 0 || col >= len(h) {
+		return false
+	}
+
 	return h[col].Time
 }
 
@@ -171,7 +181,7 @@ func (h Header) IndexOf(colName string, includeWide bool) int {
 	return -1
 }
 
-// Dump for debuging.
+// Dump for debugging.
 func (h Header) Dump() {
 	log.Debug().Msgf("HEADER")
 	for i, c := range h {

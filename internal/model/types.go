@@ -2,13 +2,42 @@ package model
 
 import (
 	"context"
+	"time"
 
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/dao"
 	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/tview"
+	"github.com/sahilm/fuzzy"
 	"k8s.io/apimachinery/pkg/runtime"
 )
+
+const (
+	maxReaderRetryInterval   = 2 * time.Minute
+	defaultReaderRefreshRate = 5 * time.Second
+)
+
+// ResourceViewerListener listens to viewing resource events.
+type ResourceViewerListener interface {
+	ResourceChanged(lines []string, matches fuzzy.Matches)
+	ResourceFailed(error)
+}
+
+// ViewerToggleOpts represents a collection of viewing options.
+type ViewerToggleOpts map[string]bool
+
+// ResourceViewer represents a viewed resource.
+type ResourceViewer interface {
+	GetPath() string
+	Filter(string)
+	ClearFilter()
+	Peek() []string
+	SetOptions(context.Context, ViewerToggleOpts)
+	Watch(context.Context) error
+	Refresh(context.Context) error
+	AddListener(ResourceViewerListener)
+	RemoveListener(ResourceViewerListener)
+}
 
 // Igniter represents a runnable view.
 type Igniter interface {
@@ -39,15 +68,25 @@ type Primitive interface {
 	Name() string
 }
 
-// Component represents a ui component
+// Commander tracks prompt status.
+type Commander interface {
+	// InCmdMode checks if prompt is active.
+	InCmdMode() bool
+}
+
+// Component represents a ui component.
 type Component interface {
 	Primitive
 	Igniter
 	Hinter
+	Commander
 }
 
 // Renderer represents a resource renderer.
 type Renderer interface {
+	// IsGeneric identifies a generic handler.
+	IsGeneric() bool
+
 	// Render converts raw resources to tabular data.
 	Render(o interface{}, ns string, row *render.Row) error
 

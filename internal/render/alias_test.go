@@ -5,7 +5,7 @@ import (
 
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/render"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -25,15 +25,17 @@ func TestAliasColorer(t *testing.T) {
 		"addAll": {
 			ns: client.AllNamespaces,
 			re: render.RowEvent{Kind: render.EventAdd, Row: r},
-			e:  tcell.ColorMediumSpringGreen},
+			e:  tcell.ColorBlue,
+		},
 		"deleteAll": {
 			ns: client.AllNamespaces,
 			re: render.RowEvent{Kind: render.EventDelete, Row: r},
-			e:  tcell.ColorMediumSpringGreen},
+			e:  tcell.ColorGray,
+		},
 		"updateAll": {
 			ns: client.AllNamespaces,
 			re: render.RowEvent{Kind: render.EventUpdate, Row: r},
-			e:  tcell.ColorMediumSpringGreen,
+			e:  tcell.ColorDefault,
 		},
 	}
 
@@ -81,6 +83,6 @@ func BenchmarkAlias(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		var r render.Row
-		a.Render(o, "aliases", &r)
+		_ = a.Render(o, "aliases", &r)
 	}
 }

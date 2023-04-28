@@ -5,9 +5,8 @@ import (
 
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
-	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 )
 
 // User presents a user viewer.
@@ -18,8 +17,7 @@ type User struct {
 // NewUser returns a new subject viewer.
 func NewUser(gvr client.GVR) ResourceViewer {
 	u := User{ResourceViewer: NewBrowser(gvr)}
-	u.GetTable().SetColorerFn(render.Subject{}.ColorerFunc())
-	u.SetBindKeysFn(u.bindKeys)
+	u.AddBindKeysFn(u.bindKeys)
 	u.SetContextFn(u.subjectCtx)
 
 	return &u
@@ -42,7 +40,7 @@ func (u *User) policyCmd(evt *tcell.EventKey) *tcell.EventKey {
 	if path == "" {
 		return evt
 	}
-	if err := u.App().inject(NewPolicy(u.App(), "User", path)); err != nil {
+	if err := u.App().inject(NewPolicy(u.App(), "User", path), false); err != nil {
 		u.App().Flash().Err(err)
 	}
 

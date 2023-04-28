@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"testing"
 
 	"github.com/derailed/k9s/internal"
@@ -31,9 +31,9 @@ func TestTableRefresh(t *testing.T) {
 	ctx := context.WithValue(context.Background(), internal.KeyFactory, f)
 	ctx = context.WithValue(ctx, internal.KeyFields, "")
 	ctx = context.WithValue(ctx, internal.KeyWithMetrics, false)
-	ta.Refresh(ctx)
+	assert.NoError(t, ta.Refresh(ctx))
 	data := ta.Peek()
-	assert.Equal(t, 17, len(data.Header))
+	assert.Equal(t, 22, len(data.Header))
 	assert.Equal(t, 1, len(data.RowEvents))
 	assert.Equal(t, client.NamespaceAll, data.Namespace)
 	assert.Equal(t, 1, l.count)
@@ -72,9 +72,10 @@ type tableListener struct {
 	count, errs int
 }
 
-func (l *tableListener) TableDataChanged(render.TableData) {
+func (l *tableListener) TableDataChanged(*render.TableData) {
 	l.count++
 }
+
 func (l *tableListener) TableLoadFailed(error) {
 	l.errs++
 }
@@ -86,23 +87,27 @@ type tableFactory struct {
 var _ dao.Factory = tableFactory{}
 
 func (f tableFactory) Client() client.Connection {
-	return client.NewTestClient()
+	return client.NewTestAPIClient()
 }
+
 func (f tableFactory) Get(gvr, path string, wait bool, sel labels.Selector) (runtime.Object, error) {
 	if len(f.rows) > 0 {
 		return f.rows[0], nil
 	}
 	return nil, nil
 }
+
 func (f tableFactory) List(gvr, ns string, wait bool, sel labels.Selector) ([]runtime.Object, error) {
 	if len(f.rows) > 0 {
 		return f.rows, nil
 	}
 	return nil, nil
 }
-func (f tableFactory) ForResource(ns, gvr string) informers.GenericInformer {
-	return nil
+
+func (f tableFactory) ForResource(ns, gvr string) (informers.GenericInformer, error) {
+	return nil, nil
 }
+
 func (f tableFactory) CanForResource(ns, gvr string, verbs []string) (informers.GenericInformer, error) {
 	return nil, nil
 }
@@ -117,7 +122,7 @@ func makeTableFactory() tableFactory {
 }
 
 func mustLoad(n string) *unstructured.Unstructured {
-	raw, err := ioutil.ReadFile(fmt.Sprintf("testdata/%s.json", n))
+	raw, err := os.ReadFile(fmt.Sprintf("testdata/%s.json", n))
 	if err != nil {
 		panic(err)
 	}

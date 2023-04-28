@@ -8,10 +8,12 @@ import (
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/config"
+	"github.com/derailed/k9s/internal/dao"
 	"github.com/derailed/k9s/internal/model"
 	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
 	"github.com/stretchr/testify/assert"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -27,7 +29,7 @@ func TestTableUpdate(t *testing.T) {
 	v.Init(makeContext())
 
 	data := makeTableData()
-	v.Update(data)
+	v.Update(data, false)
 
 	assert.Equal(t, len(data.RowEvents)+1, v.GetRowCount())
 	assert.Equal(t, len(data.Header), v.GetColumnCount())
@@ -36,9 +38,9 @@ func TestTableUpdate(t *testing.T) {
 func TestTableSelection(t *testing.T) {
 	v := ui.NewTable(client.NewGVR("fred"))
 	v.Init(makeContext())
-	m := &testModel{}
+	m := &mockModel{}
 	v.SetModel(m)
-	v.Update(m.Peek())
+	v.Update(m.Peek(), false)
 	v.SelectRow(1, true)
 
 	r, ok := v.GetSelectedRow("r1")
@@ -57,36 +59,43 @@ func TestTableSelection(t *testing.T) {
 // ----------------------------------------------------------------------------
 // Helpers...
 
-type testModel struct{}
+type mockModel struct{}
 
-var _ ui.Tabular = &testModel{}
+var _ ui.Tabular = &mockModel{}
 
-func (t *testModel) SetInstance(string)              {}
-func (t *testModel) Empty() bool                     { return false }
-func (t *testModel) HasMetrics() bool                { return true }
-func (t *testModel) Peek() render.TableData          { return makeTableData() }
-func (t *testModel) ClusterWide() bool               { return false }
-func (t *testModel) GetNamespace() string            { return "blee" }
-func (t *testModel) SetNamespace(string)             {}
-func (t *testModel) ToggleToast()                    {}
-func (t *testModel) AddListener(model.TableListener) {}
-func (t *testModel) Watch(context.Context)           {}
-func (t *testModel) Get(ctx context.Context, path string) (runtime.Object, error) {
+func (t *mockModel) SetInstance(string)                 {}
+func (t *mockModel) SetLabelFilter(string)              {}
+func (t *mockModel) Empty() bool                        { return false }
+func (t *mockModel) Count() int                         { return 1 }
+func (t *mockModel) HasMetrics() bool                   { return true }
+func (t *mockModel) Peek() *render.TableData            { return makeTableData() }
+func (t *mockModel) Refresh(context.Context) error      { return nil }
+func (t *mockModel) ClusterWide() bool                  { return false }
+func (t *mockModel) GetNamespace() string               { return "blee" }
+func (t *mockModel) SetNamespace(string)                {}
+func (t *mockModel) ToggleToast()                       {}
+func (t *mockModel) AddListener(model.TableListener)    {}
+func (t *mockModel) RemoveListener(model.TableListener) {}
+func (t *mockModel) Watch(context.Context) error        { return nil }
+func (t *mockModel) Get(ctx context.Context, path string) (runtime.Object, error) {
 	return nil, nil
 }
-func (t *testModel) Delete(ctx context.Context, path string, c, f bool) error {
+
+func (t *mockModel) Delete(context.Context, string, *metav1.DeletionPropagation, dao.Grace) error {
 	return nil
 }
-func (t *testModel) Describe(context.Context, string) (string, error) {
-	return "", nil
-}
-func (t *testModel) ToYAML(ctx context.Context, path string) (string, error) {
-	return "", nil
-}
-func (t *testModel) InNamespace(string) bool      { return true }
-func (t *testModel) SetRefreshRate(time.Duration) {}
 
-func makeTableData() render.TableData {
+func (t *mockModel) Describe(context.Context, string) (string, error) {
+	return "", nil
+}
+
+func (t *mockModel) ToYAML(ctx context.Context, path string) (string, error) {
+	return "", nil
+}
+func (t *mockModel) InNamespace(string) bool      { return true }
+func (t *mockModel) SetRefreshRate(time.Duration) {}
+
+func makeTableData() *render.TableData {
 	t := render.NewTableData()
 	t.Namespace = ""
 	t.Header = render.Header{
@@ -109,7 +118,7 @@ func makeTableData() render.TableData {
 		},
 	}
 
-	return *t
+	return t
 }
 
 func makeContext() context.Context {

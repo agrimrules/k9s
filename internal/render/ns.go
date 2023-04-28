@@ -6,14 +6,16 @@ import (
 	"strings"
 
 	"github.com/derailed/k9s/internal/client"
-	"github.com/gdamore/tcell"
+	"github.com/derailed/tcell/v2"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // Namespace renders a K8s Namespace to screen.
-type Namespace struct{}
+type Namespace struct {
+	Base
+}
 
 // ColorerFunc colors a resource row.
 func (n Namespace) ColorerFunc() ColorerFunc {
@@ -42,7 +44,7 @@ func (Namespace) Header(string) Header {
 		HeaderColumn{Name: "STATUS"},
 		HeaderColumn{Name: "LABELS", Wide: true},
 		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		HeaderColumn{Name: "AGE", Time: true},
 	}
 }
 
@@ -64,7 +66,7 @@ func (n Namespace) Render(o interface{}, _ string, r *Row) error {
 		string(ns.Status.Phase),
 		mapToStr(ns.Labels),
 		asStatus(n.diagnose(ns.Status.Phase)),
-		toAge(ns.ObjectMeta.CreationTimestamp),
+		toAge(ns.GetCreationTimestamp()),
 	}
 
 	return nil

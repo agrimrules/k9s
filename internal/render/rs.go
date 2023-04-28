@@ -12,7 +12,9 @@ import (
 )
 
 // ReplicaSet renders a K8s ReplicaSet to screen.
-type ReplicaSet struct{}
+type ReplicaSet struct {
+	Base
+}
 
 // ColorerFunc colors a resource row.
 func (r ReplicaSet) ColorerFunc() ColorerFunc {
@@ -29,7 +31,7 @@ func (ReplicaSet) Header(ns string) Header {
 		HeaderColumn{Name: "READY", Align: tview.AlignRight},
 		HeaderColumn{Name: "LABELS", Wide: true},
 		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		HeaderColumn{Name: "AGE", Time: true},
 	}
 }
 
@@ -54,7 +56,7 @@ func (r ReplicaSet) Render(o interface{}, ns string, row *Row) error {
 		strconv.Itoa(int(rs.Status.ReadyReplicas)),
 		mapToStr(rs.Labels),
 		asStatus(r.diagnose(rs)),
-		toAge(rs.ObjectMeta.CreationTimestamp),
+		toAge(rs.GetCreationTimestamp()),
 	}
 
 	return nil

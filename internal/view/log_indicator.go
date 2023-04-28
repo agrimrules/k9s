@@ -1,33 +1,39 @@
 package view
 
 import (
-	"fmt"
 	"sync/atomic"
 
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/tview"
 )
 
+const spacer = "     "
+
 // LogIndicator represents a log view indicator.
 type LogIndicator struct {
 	*tview.TextView
 
-	styles       *config.Styles
-	scrollStatus int32
-	fullScreen   bool
-	textWrap     bool
-	showTime     bool
+	styles                     *config.Styles
+	scrollStatus               int32
+	indicator                  []byte
+	fullScreen                 bool
+	textWrap                   bool
+	showTime                   bool
+	allContainers              bool
+	shouldDisplayAllContainers bool
 }
 
 // NewLogIndicator returns a new indicator.
-func NewLogIndicator(cfg *config.Config, styles *config.Styles) *LogIndicator {
+func NewLogIndicator(cfg *config.Config, styles *config.Styles, allContainers bool) *LogIndicator {
 	l := LogIndicator{
-		styles:       styles,
-		TextView:     tview.NewTextView(),
-		scrollStatus: 1,
-		fullScreen:   cfg.K9s.Logger.FullScreenLogs,
-		textWrap:     cfg.K9s.Logger.TextWrap,
-		showTime:     cfg.K9s.Logger.ShowTime,
+		styles:                     styles,
+		TextView:                   tview.NewTextView(),
+		indicator:                  make([]byte, 0, 100),
+		scrollStatus:               1,
+		fullScreen:                 cfg.K9s.Logger.FullScreenLogs,
+		textWrap:                   cfg.K9s.Logger.TextWrap,
+		showTime:                   cfg.K9s.Logger.ShowTime,
+		shouldDisplayAllContainers: allContainers,
 	}
 	l.StylesChanged(styles)
 	styles.AddListener(&l)
@@ -90,22 +96,52 @@ func (l *LogIndicator) ToggleAutoScroll() {
 	l.Refresh()
 }
 
+// ToggleAllContainers toggles the all-containers mode.
+func (l *LogIndicator) ToggleAllContainers() {
+	l.allContainers = !l.allContainers
+	l.Refresh()
+}
+
+func (l *LogIndicator) reset() {
+	l.Clear()
+	l.indicator = l.indicator[:0]
+}
+
 // Refresh updates the view.
 func (l *LogIndicator) Refresh() {
-	l.Clear()
-	l.update("Autoscroll: " + l.onOff(l.AutoScroll()))
-	l.update("FullScreen: " + l.onOff(l.fullScreen))
-	l.update("Timestamps: " + l.onOff(l.showTime))
-	l.update("Wrap: " + l.onOff(l.textWrap))
-}
+	l.reset()
 
-func (l *LogIndicator) onOff(b bool) string {
-	if b {
-		return "On"
+	if l.shouldDisplayAllContainers {
+		if l.allContainers {
+			l.indicator = append(l.indicator, "[::b]AllContainers:[limegreen::b]On[-::] "+spacer...)
+		} else {
+			l.indicator = append(l.indicator, "[::b]AllContainers:[gray::d]Off[-::]"+spacer...)
+		}
 	}
-	return "Off"
-}
 
-func (l *LogIndicator) update(status string) {
-	fmt.Fprintf(l, "[::b]%-20s", status)
+	if l.AutoScroll() {
+		l.indicator = append(l.indicator, "[::b]Autoscroll:[limegreen::b]On[-::] "+spacer...)
+	} else {
+		l.indicator = append(l.indicator, "[::b]Autoscroll:[gray::d]Off[-::]"+spacer...)
+	}
+
+	if l.FullScreen() {
+		l.indicator = append(l.indicator, "[::b]FullScreen:[limegreen::b]On[-::] "+spacer...)
+	} else {
+		l.indicator = append(l.indicator, "[::b]FullScreen:[gray::d]Off[-::]"+spacer...)
+	}
+
+	if l.Timestamp() {
+		l.indicator = append(l.indicator, "[::b]Timestamps:[limegreen::b]On[-::] "+spacer...)
+	} else {
+		l.indicator = append(l.indicator, "[::b]Timestamps:[gray::d]Off[-::]"+spacer...)
+	}
+
+	if l.TextWrap() {
+		l.indicator = append(l.indicator, "[::b]Wrap:[limegreen::b]On[-::] "...)
+	} else {
+		l.indicator = append(l.indicator, "[::b]Wrap:[gray::d]Off[-::]"...)
+	}
+
+	_, _ = l.Write(l.indicator)
 }

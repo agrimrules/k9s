@@ -4,13 +4,39 @@ import (
 	"bytes"
 	"errors"
 	"math"
+	"regexp"
 
 	"github.com/derailed/tview"
 	runewidth "github.com/mattn/go-runewidth"
 	"github.com/rs/zerolog/log"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/cli-runtime/pkg/printers"
 )
+
+const defaultServiceAccount = "default"
+
+var (
+	inverseRx = regexp.MustCompile(`\A\!`)
+	fuzzyRx   = regexp.MustCompile(`\A\-f`)
+)
+
+func inList(ll []string, s string) bool {
+	for _, l := range ll {
+		if l == s {
+			return true
+		}
+	}
+	return false
+}
+
+// IsInverseSelector checks if inverse char has been provided.
+func IsInverseSelector(s string) bool {
+	if s == "" {
+		return false
+	}
+	return inverseRx.MatchString(s)
+}
 
 // IsFuzzySelector checks if filter is fuzzy or not.
 func IsFuzzySelector(s string) bool {
@@ -33,7 +59,7 @@ func Truncate(str string, width int) string {
 }
 
 // ToYAML converts a resource to its YAML representation.
-func ToYAML(o runtime.Object) (string, error) {
+func ToYAML(o runtime.Object, showManaged bool) (string, error) {
 	if o == nil {
 		return "", errors.New("no object to yamlize")
 	}
@@ -42,6 +68,13 @@ func ToYAML(o runtime.Object) (string, error) {
 		buff bytes.Buffer
 		p    printers.YAMLPrinter
 	)
+	if !showManaged {
+		o = o.DeepCopyObject()
+		uo := o.(*unstructured.Unstructured).Object
+		if meta, ok := uo["metadata"].(map[string]interface{}); ok {
+			delete(meta, "managedFields")
+		}
+	}
 	err := p.PrintObj(o, &buff)
 	if err != nil {
 		log.Error().Msgf("Marshal Error %v", err)
@@ -49,4 +82,14 @@ func ToYAML(o runtime.Object) (string, error) {
 	}
 
 	return buff.String(), nil
+}
+
+// serviceAccountMatches validates that the ServiceAccount referenced in the PodSpec matches the incoming
+// ServiceAccount. If the PodSpec ServiceAccount is blank kubernetes will use the "default" ServiceAccount
+// when deploying the pod, so if the incoming SA is "default" and podSA is an empty string that is also a match.
+func serviceAccountMatches(podSA, saName string) bool {
+	if podSA == "" {
+		podSA = defaultServiceAccount
+	}
+	return podSA == saName
 }

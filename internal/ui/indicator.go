@@ -8,8 +8,8 @@ import (
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/model"
 	"github.com/derailed/k9s/internal/render"
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell"
 )
 
 // StatusIndicator represents a status indicator when main header is collapsed.
@@ -64,6 +64,9 @@ func (s *StatusIndicator) ClusterInfoUpdated(data model.ClusterMeta) {
 
 // ClusterInfoChanged notifies the cluster meta was changed.
 func (s *StatusIndicator) ClusterInfoChanged(prev, cur model.ClusterMeta) {
+	if !s.app.IsRunning() {
+		return
+	}
 	s.app.QueueUpdateDraw(func() {
 		s.SetPermanent(fmt.Sprintf(
 			statusIndicatorFmt,
@@ -77,7 +80,7 @@ func (s *StatusIndicator) ClusterInfoChanged(prev, cur model.ClusterMeta) {
 	})
 }
 
-// SetPermanent sets permanent title to be reset to after updates
+// SetPermanent sets permanent title to be reset to after updates.
 func (s *StatusIndicator) SetPermanent(info string) {
 	s.permanent = info
 	s.SetText(info)

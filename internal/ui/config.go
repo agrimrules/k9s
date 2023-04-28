@@ -7,18 +7,17 @@ import (
 
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/render"
-	"github.com/derailed/tview"
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
 )
 
 // Synchronizer manages ui event queue.
 type synchronizer interface {
-	QueueUpdateDraw(func()) *tview.Application
-	QueueUpdate(func()) *tview.Application
+	QueueUpdateDraw(func())
+	QueueUpdate(func())
 }
 
-// Configurator represents an application configurationa.
+// Configurator represents an application configuration.
 type Configurator struct {
 	Config     *config.Config
 	Styles     *config.Styles
@@ -48,10 +47,10 @@ func (c *Configurator) CustomViewsWatcher(ctx context.Context, s synchronizer) e
 					c.RefreshCustomViews()
 				})
 			case err := <-w.Errors:
-				log.Info().Err(err).Msg("CustomView watcher failed")
+				log.Warn().Err(err).Msg("CustomView watcher failed")
 				return
 			case <-ctx.Done():
-				log.Debug().Msgf("CustomViewWatcher Done `%s!!", config.K9sViewConfigFile)
+				log.Debug().Msgf("CustomViewWatcher CANCELED `%s!!", config.K9sViewConfigFile)
 				if err := w.Close(); err != nil {
 					log.Error().Err(err).Msg("Closing CustomView watcher")
 				}
@@ -74,7 +73,7 @@ func (c *Configurator) RefreshCustomViews() {
 	}
 
 	if err := c.CustomView.Load(config.K9sViewConfigFile); err != nil {
-		log.Error().Err(err).Msgf("Custom view load failed %s", config.K9sViewConfigFile)
+		log.Warn().Err(err).Msgf("Custom view load failed %s", config.K9sViewConfigFile)
 		return
 	}
 }
@@ -94,15 +93,16 @@ func (c *Configurator) StylesWatcher(ctx context.Context, s synchronizer) error 
 		for {
 			select {
 			case evt := <-w.Events:
-				_ = evt
-				s.QueueUpdateDraw(func() {
-					c.RefreshStyles(c.Config.K9s.CurrentCluster)
-				})
+				if evt.Op != fsnotify.Chmod {
+					s.QueueUpdateDraw(func() {
+						c.RefreshStyles(c.Config.K9s.CurrentCluster)
+					})
+				}
 			case err := <-w.Errors:
 				log.Info().Err(err).Msg("Skin watcher failed")
 				return
 			case <-ctx.Done():
-				log.Debug().Msgf("SkinWatcher Done `%s!!", c.skinFile)
+				log.Debug().Msgf("SkinWatcher CANCELED `%s!!", c.skinFile)
 				if err := w.Close(); err != nil {
 					log.Error().Err(err).Msg("Closing Skin watcher")
 				}
@@ -117,28 +117,28 @@ func (c *Configurator) StylesWatcher(ctx context.Context, s synchronizer) error 
 
 // BenchConfig location of the benchmarks configuration file.
 func BenchConfig(context string) string {
-	return filepath.Join(config.K9sHome, config.K9sBench+"-"+context+".yml")
+	return filepath.Join(config.K9sHome(), config.K9sBench+"-"+context+".yml")
 }
 
 // RefreshStyles load for skin configuration changes.
 func (c *Configurator) RefreshStyles(context string) {
 	c.BenchFile = BenchConfig(context)
 
-	clusterSkins := filepath.Join(config.K9sHome, fmt.Sprintf("%s_skin.yml", context))
+	clusterSkins := filepath.Join(config.K9sHome(), fmt.Sprintf("%s_skin.yml", context))
 	if c.Styles == nil {
 		c.Styles = config.NewStyles()
 	} else {
 		c.Styles.Reset()
 	}
 	if err := c.Styles.Load(clusterSkins); err != nil {
-		log.Info().Msgf("No context specific skin file found -- %s", clusterSkins)
+		log.Warn().Msgf("No context specific skin file found -- %s", clusterSkins)
 	} else {
 		c.updateStyles(clusterSkins)
 		return
 	}
 
 	if err := c.Styles.Load(config.K9sStylesFile); err != nil {
-		log.Info().Msgf("No skin file found -- %s. Loading stock skins.", config.K9sStylesFile)
+		log.Warn().Msgf("No skin file found -- %s. Loading stock skins.", config.K9sStylesFile)
 		c.updateStyles("")
 		return
 	}
@@ -156,6 +156,7 @@ func (c *Configurator) updateStyles(f string) {
 	render.AddColor = c.Styles.Frame().Status.AddColor.Color()
 	render.ErrColor = c.Styles.Frame().Status.ErrorColor.Color()
 	render.StdColor = c.Styles.Frame().Status.NewColor.Color()
+	render.PendingColor = c.Styles.Frame().Status.PendingColor.Color()
 	render.HighlightColor = c.Styles.Frame().Status.HighlightColor.Color()
 	render.KillColor = c.Styles.Frame().Status.KillColor.Color()
 	render.CompletedColor = c.Styles.Frame().Status.CompletedColor.Color()
